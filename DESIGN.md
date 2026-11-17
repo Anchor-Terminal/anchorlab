@@ -100,7 +100,8 @@ small, they use the standard library only, and they treat everything above as da
   new leaves the box.
 - **Everything is written down as it happens.** One file of events a day, appended and synced a
   line at a time, so `tail -f` is the lab's live view. The programs, their output and the model's
-  replies are kept in a folder a run. One line a finished run goes to `results.ndjson`.
+  replies are kept in a folder a run, filed by model, company and tool (below). One line a finished
+  run goes to `results.ndjson`.
 - **Only numbers and fixed words leave the box.** A result line has counts, timings, statuses from
   fixed lists, and the server's own tool names when they're shaped like names. No description, no
   error message, no sentence from a model. That keeps a stranger's text off the site and out of any
@@ -138,9 +139,21 @@ small, they use the standard library only, and they treat everything above as da
   collector is written against the formats (`anchor-lab-result/1`, `anchor-lab-stats/1`), not
   against this code. It's public so that how a tool is tested can be read, and a vendor can run it
   against their own server.
-- **The targets are the servers that already answer the site's probe without a key.** The site's
-  server makes the list from its live snapshot. That's the set where no account is needed, so the
-  first version carries no credentials at all.
+- **The targets come from Anchor Terminal's public API.** `anchor-lab targets` reads
+  `/api/v1/tools.json` and keeps the listings whose hosted MCP server answered the site's own probe
+  without a key. That's the set where no account is needed, so the first version carries no
+  credentials at all. Reading the public API, not the site's files, means anyone can make the same
+  list, and the box can make it itself: it's the internet, which the box can reach, and nothing of
+  ours it would need a key for.
+- **Research is filed by model, then company, then tool.** Each run's files go in
+  `research/<model>/<company>/<tool>/<run>/`: the company-then-tool order Anchor Terminal's own
+  research uses, with the model on top, so one model's work can be compared with another's or
+  dropped as a whole. The company comes from the list (`company`, which the API carries). Every
+  part of the path is cut down to letters, digits, dots, dashes and underscores, so no name from a
+  list or a setting reaches outside the folder.
+- **Switching models is one command.** `anchor-lab model use <name>` checks the model server has
+  it, writes it in the settings, asks the server to load it and restarts the harness. Which model
+  the lab uses is a decision we make, after the bench; the command only makes acting on it safe.
 - **The cells replace the `agent-run` wrapper.** An earlier wrapper started a sandbox by hand for
   each agent, which is what the cell units now do from a file. `install.sh` removes the wrapper when it finds it on the
   box and says so. It leaves the folder of earlier agents' reports alone, and it prints any sudo

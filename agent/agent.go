@@ -60,8 +60,9 @@ func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
 	started := o.now().UTC()
 	run := started.Format("20060102T150405") + "-" + t.Slug
 	j := o.Journal
-	j.Event(run, "run.start", map[string]any{"slug": t.Slug, "url": t.URL, "harness": o.Version})
-	base := journal.Result{Run: run, Slug: t.Slug, Started: started, Harness: o.Version}
+	j.Place(run, o.Model, t.Company, t.Slug)
+	j.Event(run, "run.start", map[string]any{"slug": t.Slug, "company": t.Company, "url": t.URL, "harness": o.Version})
+	base := journal.Result{Run: run, Slug: t.Slug, Company: t.Company, Started: started, Harness: o.Version}
 
 	open := o.Open
 	if open == nil {

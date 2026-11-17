@@ -26,4 +26,6 @@ private bench set.
 - MODELS.md and `models/` are how the models run. A new model or build is a line in
   `models/models.txt` with its size and SHA-256 from the Hub, a section in `models/presets.ini` with
   its publisher's sampling, and a row in MODELS.md.
+- The list of servers to test comes from Anchor Terminal's public API (`anchor-lab targets`), and
+  what the lab finds is filed as `research/<model>/<company>/<tool>/<run>/` (`journal.Folder`).
 - Decisions go into DESIGN.md in the same pull request, with the reason.

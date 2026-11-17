@@ -3,10 +3,10 @@
 Everything in this folder except this file and `settings.example.env` is ignored by git
 (`.gitignore`), so it never reaches the public repository. It's where our own things go:
 
-- `results/`: what the lab found, copied off the box: `results.ndjson`, the event files, the bench
-  scores, and the transcripts (`runs/<run>/`) when someone wants to read them. The transcripts hold
-  servers' tool descriptions and models' words, which never leave the box on their own and never
-  get published.
+- `research/`: what the lab found, copied off the box, in the box's own layout,
+  `research/<model>/<company>/<tool>/<run>/`, beside `results.ndjson`, the event files and the bench
+  scores. The transcripts in it hold servers' tool descriptions and models' words, which never leave
+  the box on their own and never get published.
 - `settings.env`: our own settings, read by `build.sh`, `models/fetch.sh` and `models/install.sh`
   when it's here. Start from `settings.example.env`.
 - `presets.ini`: our own model presets. `models/install.sh` uses it in place of

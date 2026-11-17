@@ -1,0 +1,230 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+	"syscall"
+	"text/tabwriter"
+	"time"
+
+	"github.com/Anchor-Terminal/anchorlab/brain"
+)
+
+// modelCmd is which model the lab uses, and switching it when we decide (MODELS.md).
+//
+//	anchor-lab model                  the model the lab uses, and every model the server offers
+//	sudo anchor-lab model use <name>  use another: checks the server has it, writes it in the
+//	                                  settings and restarts the harness
+//	sudo anchor-lab model use none    connect only, no model
+func modelCmd(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("model", flag.ExitOnError)
+	env := fs.String("env", "/etc/anchor-lab/env", "the lab's settings")
+	restart := fs.Bool("restart", true, "restart anchor-lab after a switch, so it takes the new model")
+	load := fs.Bool("load", true, "ask the model server to load the new model now, so the first test doesn't wait for it")
+	force := fs.Bool("force", false, "switch to a name the model server doesn't list")
+	fs.Parse(args)
+	settings := readEnv(*env)
+	base := settings["ANCHOR_LAB_MODEL_URL"]
+	if base == "" {
+		base = "http://127.0.0.1:8080/v1"
+	}
+	if err := brain.Local(base); err != nil {
+		return fmt.Errorf("ANCHOR_LAB_MODEL_URL: %w", err)
+	}
+	server := strings.TrimSuffix(strings.TrimSuffix(base, "/"), "/v1")
+
+	switch rest := fs.Args(); {
+	case len(rest) == 0:
+		models, err := serverModels(server)
+		current := settings["ANCHOR_LAB_MODEL"]
+		if current == "" {
+			fmt.Fprintln(out, "the lab uses: no model (connect only)")
+		} else {
+			fmt.Fprintf(out, "the lab uses: %s\n", current)
+		}
+		if err != nil {
+			fmt.Fprintf(out, "the model server at %s: %v\n", server, err)
+			return nil
+		}
+		fmt.Fprintf(out, "\nthe model server at %s has:\n", server)
+		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+		for _, m := range models {
+			mark := " "
+			if m.ID == current {
+				mark = "*"
+			}
+			fmt.Fprintf(tw, "  %s %s\t%s\n", mark, m.ID, m.Status)
+		}
+		tw.Flush()
+		if current != "" && !has(models, current) {
+			fmt.Fprintf(out, "\n%s isn't one of them: the lab's requests will fail until it is, or until `anchor-lab model use` names one that is\n", current)
+		}
+		return nil
+
+	case len(rest) == 2 && rest[0] == "use":
+		name := rest[1]
+		if name == "none" {
+			name = ""
+		} else if !modelName.MatchString(name) {
+			return fmt.Errorf("%q isn't a model's name", name)
+		}
+		if name != "" && !*force {
+			models, err := serverModels(server)
+			if err != nil {
+				return fmt.Errorf("the model server at %s: %w (start it, or -force)", server, err)
+			}
+			if !has(models, name) {
+				var ids []string
+				for _, m := range models {
+					ids = append(ids, m.ID)
+				}
+				return fmt.Errorf("the model server doesn't have %s; it has %s", name, strings.Join(ids, ", "))
+			}
+		}
+		if err := setEnv(*env, "ANCHOR_LAB_MODEL", name); err != nil {
+			return err
+		}
+		if name == "" {
+			fmt.Fprintln(out, "the lab uses no model now: connect only")
+		} else {
+			fmt.Fprintf(out, "the lab uses %s now\n", name)
+		}
+		if name != "" && *load {
+			if err := loadModel(server, name); err != nil {
+				fmt.Fprintf(out, "  asking the server to load it: %v (the first test loads it instead)\n", err)
+			} else {
+				fmt.Fprintln(out, "  the model server is loading it")
+			}
+		}
+		if *restart {
+			if b, err := exec.Command("systemctl", "restart", "anchor-lab").CombinedOutput(); err != nil {
+				return fmt.Errorf("restarting anchor-lab: %v: %s (the setting is saved; restart it by hand)", err, bytes.TrimSpace(b))
+			}
+			fmt.Fprintln(out, "  anchor-lab restarted")
+		}
+		return nil
+	}
+	return errors.New("usage: anchor-lab model | anchor-lab model use <name|none>")
+}
+
+var modelName = regexp.MustCompile(`^[A-Za-z0-9._:/+-]{1,96}$`)
+
+type serverModel struct {
+	ID     string
+	Status string
+}
+
+func has(ms []serverModel, id string) bool {
+	for _, m := range ms {
+		if m.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// serverModels asks llama-server's router for its models and their state.
+func serverModels(server string) ([]serverModel, error) {
+	cl := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	resp, err := cl.Get(server + "/models")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d from /models", resp.StatusCode)
+	}
+	var list struct {
+		Data []struct {
+			ID     string          `json:"id"`
+			Status json.RawMessage `json:"status"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&list); err != nil {
+		return nil, err
+	}
+	var out []serverModel
+	for _, m := range list.Data {
+		st := "available"
+		var s struct {
+			Value  string `json:"value"`
+			Failed bool   `json:"failed"`
+		}
+		if json.Unmarshal(m.Status, &s) == nil && s.Value != "" {
+			st = s.Value
+			if s.Failed {
+				st += ", failed last time"
+			}
+		}
+		out = append(out, serverModel{ID: m.ID, Status: st})
+	}
+	return out, nil
+}
+
+func loadModel(server, name string) error {
+	body, _ := json.Marshal(map[string]string{"model": name})
+	cl := &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	resp, err := cl.Post(server+"/models/load", "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(b))
+	}
+	return nil
+}
+
+// setEnv sets one KEY=value line in the settings file, keeping every other line, the file's mode
+// and its owner, and replacing it in one rename.
+func setEnv(path, key, value string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("%s: %w (as root: sudo anchor-lab model use ...)", path, err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	done := false
+	for i, l := range lines {
+		if strings.HasPrefix(strings.TrimSpace(l), key+"=") {
+			lines[i] = key + "=" + value
+			done = true
+		}
+	}
+	if !done {
+		lines = append(lines, key+"="+value)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".env-*")
+	if err != nil {
+		return fmt.Errorf("%s: %w (as root: sudo anchor-lab model use ...)", path, err)
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), fi.Mode().Perm()); err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		os.Chown(tmp.Name(), int(st.Uid), int(st.Gid))
+	}
+	return os.Rename(tmp.Name(), path)
+}

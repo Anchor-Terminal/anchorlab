@@ -65,30 +65,43 @@ func TestSync(t *testing.T) {
 	}
 }
 
-func TestTargetsFromListings(t *testing.T) {
-	data := t.TempDir()
-	os.MkdirAll(filepath.Join(data, "tools"), 0o755)
-	for slug, body := range map[string]string{
-		"open-mcp":   `{"slug":"open-mcp","name":"Open","kind":"mcp","auth":"none","remoteUrl":"https://mcp.open.example/mcp"}`,
-		"keyed-mcp":  `{"slug":"keyed-mcp","name":"Keyed","kind":"mcp","auth":"api-key","remoteUrl":"https://mcp.keyed.example/mcp"}`,
-		"an-api":     `{"slug":"an-api","name":"API","kind":"http-api","auth":"none","remoteUrl":"https://api.example/v1"}`,
-		"gone-mcp":   `{"slug":"gone-mcp","name":"Gone","kind":"mcp","auth":"none","remoteUrl":"https://mcp.gone.example/mcp","retired":"2026-10-01"}`,
-		"probed-api": `{"slug":"probed-api","name":"Probed","kind":"http-api","auth":"mixed","remoteUrl":"https://api.probed.example"}`,
-	} {
-		os.WriteFile(filepath.Join(data, "tools", slug+".json"), []byte(body), 0o644)
+// The list comes from the public API: the listings whose hosted MCP server answered the site's
+// probe without a key, with their company, and nothing else.
+func TestTargetsFromAPI(t *testing.T) {
+	api := `{"count":5,"tools":[
+		{"slug":"anchor-terminal","name":"Anchor Terminal","company":"anchorterminal.com","live":{"mcpTools":{"url":"https://www.anchorterminal.com/mcp/connected","status":"ok"}}},
+		{"slug":"keyed-mcp","name":"Keyed","company":"keyed.example","live":{"mcpTools":{"url":"https://mcp.keyed.example/mcp","status":"ok","keyed":true}}},
+		{"slug":"auth-mcp","name":"Auth","company":"auth.example","live":{"mcpTools":{"url":"https://mcp.auth.example/mcp","status":"auth"}}},
+		{"slug":"an-api","name":"API","company":"api.example","live":{}},
+		{"slug":"plain-http","name":"Plain","company":"plain.example","live":{"mcpTools":{"url":"http://mcp.plain.example/mcp","status":"ok"}}},
+		{"slug":"bad-company","name":"Bad","company":"../../etc","live":{"mcpTools":{"url":"https://mcp.bad.example/mcp","status":"ok"}}},
+		{"slug":"exa-mcp","name":"Exa","company":"exa.ai","live":{"mcpTools":{"url":"https://mcp.exa.ai/mcp","status":"ok"}}}]}`
+	f, err := targets.FromAPI(strings.NewReader(api), time.Now())
+	if err != nil {
+		t.Fatal(err)
 	}
-	f, err := targets.FromData(data, "", time.Now())
-	if err != nil || len(f.Targets) != 1 || f.Targets[0].Slug != "open-mcp" {
-		t.Errorf("from the listings alone: %+v, %v", f.Targets, err)
+	var got []string
+	for _, x := range f.Targets {
+		got = append(got, x.Slug+"@"+x.Company)
 	}
-	snap := filepath.Join(data, "snapshot.json")
-	os.WriteFile(snap, []byte(`{"tools":{
-		"probed-api":{"mcpTools":{"url":"https://mcp.probed.example/mcp","status":"ok"}},
-		"keyed-mcp":{"mcpTools":{"url":"https://mcp.keyed.example/mcp","status":"ok","keyed":true}},
-		"open-mcp":{"mcpTools":{"url":"https://mcp.open.example/mcp","status":"auth"}},
-		"gone-mcp":{"mcpTools":{"url":"https://mcp.gone.example/mcp","status":"ok"}}}}`), 0o644)
-	f, err = targets.FromData(data, snap, time.Now())
-	if err != nil || len(f.Targets) != 1 || f.Targets[0].Slug != "probed-api" || f.Targets[0].URL != "https://mcp.probed.example/mcp" {
-		t.Errorf("with the live snapshot: %+v, %v", f.Targets, err)
+	if strings.Join(got, " ") != "anchor-terminal@anchorterminal.com exa-mcp@exa.ai" {
+		t.Errorf("targets: %v", got)
+	}
+	if _, err := targets.FromAPI(strings.NewReader(`<html>`), time.Now()); err == nil {
+		t.Error("took a page that isn't the API")
+	}
+	dir := t.TempDir()
+	p := filepath.Join(dir, "tools.json")
+	os.WriteFile(p, []byte(api), 0o644)
+	var out bytes.Buffer
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	err = targetsCmd([]string{"-from", p})
+	w.Close()
+	os.Stdout = old
+	out.ReadFrom(r)
+	if err != nil || !strings.Contains(out.String(), `"company": "exa.ai"`) {
+		t.Errorf("anchor-lab targets -from a file: %v\n%s", err, out.String())
 	}
 }

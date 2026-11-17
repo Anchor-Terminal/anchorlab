@@ -70,7 +70,7 @@ person to read.
 | The lab box | `anchor-lab cell`, one for each program (`anchor-lab-cell@.service`, started by the socket) | a user made for that run, no network |
 | The lab box | `anchor-lab sync`, when the collecting server asks over SSH | `labsync`, by SSH key, this one command |
 | The lab box | `anchor-lab stats`, numbers for an admin page (`anchor-lab-stats.service`) | a user made each start, read-only |
-| The collecting server | `build.sh`, and `anchor-lab targets` to write the list of servers to test | anyone |
+| Anywhere | `build.sh`; `anchor-lab targets`, the list of servers to test, from Anchor Terminal's public API | anyone |
 
 The box needs Debian or another systemd distribution, Go (the cells compile the programs with it),
 and a model served on the box itself in the OpenAI chat format. The harness refuses a model address
@@ -90,17 +90,27 @@ It vets, runs the short tests and writes `./anchor-lab`. The box gets a binary, 
 
 ## The list of servers to test
 
-`targets.json`:
+The lab tests the tools Anchor Terminal lists, and takes the list from Anchor Terminal's public
+API, the same `/api/v1/tools.json` anyone can read: every listing whose hosted MCP server answered
+the site's own probe without a key (111 on 17 November 2026). Those need no account, so the lab
+tests them with no credentials at all.
+
+```
+./anchor-lab targets > targets.json                   # from https://www.anchorterminal.com/api/v1/tools.json
+./anchor-lab targets -from tools.json > targets.json  # from a copy saved earlier
+```
+
+It needs nothing but the internet, so it can run on the box itself. `targets.json`:
 
 ```json
 {"v": "anchor-lab-targets/1", "made": "2026-11-17T00:00:00Z",
- "targets": [{"slug": "anchor-terminal", "name": "Anchor Terminal", "url": "https://www.anchorterminal.com/mcp/connected"}]}
+ "targets": [{"slug": "anchor-terminal", "name": "Anchor Terminal", "company": "anchorterminal.com",
+              "url": "https://www.anchorterminal.com/mcp/connected"}]}
 ```
 
-Anchor Terminal makes it from its listings with
-`./anchor-lab targets -data <the site's data folder> -snapshot <its live snapshot> > targets.json`.
-For your own server, write one by hand. The example is us: Anchor Terminal's read-only MCP server,
-which needs no key and has seven tools, all marked read-only.
+`company` is the company's id as the site has it, which decides where the lab files what it finds
+(below). For your own server, write a list by hand. The example is us: Anchor Terminal's read-only
+MCP server, which needs no key and has seven tools, all marked read-only.
 
 ## Putting it on the box
 
@@ -114,7 +124,8 @@ units and leaves the state alone. It prints what's left to do by hand:
    `ANCHOR_LAB_MODEL_URL` says another address on the same machine. It sends no temperature, so the
    server's setting for each model applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. With no
    model, only `connect` runs, which is a fine first day.
-2. The first list: `install -o anchorlab -g anchorlab -m 0640 targets.json /var/lib/anchor-lab/inbox/targets.json`.
+2. The first list: `install -o anchorlab -g anchorlab -m 0640 targets.json /var/lib/anchor-lab/inbox/targets.json`,
+   or make it on the box: `anchor-lab targets | sudo -u anchorlab tee /var/lib/anchor-lab/inbox/targets.json >/dev/null`.
 3. For a server to collect results: its public key in `/var/lib/labsync/.ssh/authorized_keys`, on
    one line that starts `restrict,command="/usr/local/bin/anchor-lab sync" `, and `labsync` added
    to sshd's `AllowUsers`, key only.
@@ -197,11 +208,41 @@ your own the same way: a file that starts `//go:build privatebench`, in `package
 `Version`, `Cases` and `Right`, and build with `./build.sh <your file>`. A `_test.go.txt` file beside
 it with the same name runs with the build.
 
+## The research folder
+
+What the lab finds is filed by model, then company, then tool:
+`research/<model>/<company>/<tool>/<run>/`, the same company-then-tool order as Anchor Terminal's own
+research, with the model on top. One model's work can be read, compared with another's or deleted
+as a whole, and every run against one company's tools sits together.
+
+```
+research/gpt-oss-120b/anchorterminal.com/anchor-terminal/20261117T150000-anchor-terminal/
+research/gpt-oss-120b/exa.ai/exa-mcp/20261117T151200-exa-mcp/
+research/gemma-4-26b-a4b/exa.ai/exa-mcp/20261118T090000-exa-mcp/
+research/no-model/...                     connect-only runs, with no model set
+```
+
+On the box it's under `/var/lib/anchor-lab/`. Copied off the box it goes in `private/research/`,
+the same layout, never public: the transcripts hold servers' tool descriptions and models' words.
+
+## Switching the model
+
+```
+anchor-lab model                       # the model the lab uses, and every model the server offers
+sudo anchor-lab model use gemma-4-31b  # switch: checks the server has it, saves it, restarts the lab
+sudo anchor-lab model use none         # connect only
+```
+
+`use` checks the name against what the model server offers, writes it as `ANCHOR_LAB_MODEL` in
+`/etc/anchor-lab/env`, asks the server to load it and restarts `anchor-lab`. From then on new runs
+are filed under the new model's folder.
+
 ## The private folder
 
 `private/` is ignored by git except for its README and an example settings file. It's where our own
 things go, next to the code but never in the public repository: results and transcripts copied off
-the box, `private/settings.env` (the bench set's path, the models folder), our own model presets,
+the box (`private/research/`), `private/settings.env` (the bench set's path, the models folder),
+our own model presets,
 notes. `build.sh`, `models/fetch.sh` and `models/install.sh` read `private/settings.env` when it's
 there, and `models/install.sh` uses `private/presets.ini` in place of `models/presets.ini` when that
 is. Why there's a private folder in a public repository at all: one checkout holds both, and the
@@ -212,7 +253,8 @@ scripts find our settings without anything about our machines being written into
 
 ```
 /var/lib/anchor-lab/events/<day>.ndjson   every event as it happens
-/var/lib/anchor-lab/runs/<run>/           tools.json, model-N.txt, code-N.go, output-N.txt
+/var/lib/anchor-lab/research/<model>/<company>/<tool>/<run>/
+                                          tools.json, model-N.txt, code-N.go, output-N.txt
 /var/lib/anchor-lab/results.ndjson        one line a finished task; what a collecting server takes
 /var/lib/anchor-lab/inbox/targets.json    the servers to test
 /var/lib/anchor-lab/bench.ndjson          every model's bench score

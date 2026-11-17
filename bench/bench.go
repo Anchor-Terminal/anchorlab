@@ -147,7 +147,7 @@ func Run(ctx context.Context, o agent.Options) Score {
 		if ctx.Err() != nil {
 			break
 		}
-		for _, r := range agent.Run(ctx, o, targets.Target{Slug: "bench-" + server, Name: server, URL: "https://bench.invalid/" + server}) {
+		for _, r := range agent.Run(ctx, o, targets.Target{Slug: "bench-" + server, Name: server, URL: "https://bench.invalid/" + server, Company: "anchor-lab-bench"}) {
 			if r.Task != "explore" {
 				continue
 			}

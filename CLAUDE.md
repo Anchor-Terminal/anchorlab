@@ -17,7 +17,9 @@ private bench set.
 - What leaves the box is numbers and words from fixed lists. A field that would carry a tool's
   description, an error message or a model's words doesn't go in a result or the stats.
 - Every change goes on its own branch, `claude/<short-slug>`, and lands through a pull request that
-  Vlad or Quynh merges. Never push to main.
+  Vlad or Quynh merges. Never push to main. Base every pull request on main, never on another
+  pull request's branch: a stacked one merged after its base goes into a branch that's deleted,
+  and never reaches main (#4 did, on 17 November 2026).
 - Commits and pull requests are in Vlad's name: author `Vlad Cealicu <me@vladcealicu.com>`, no
   `Co-Authored-By` or session lines in commit messages, and no "Generated with" footer in a pull
   request's description.
@@ -26,4 +28,6 @@ private bench set.
 - MODELS.md and `models/` are how the models run. A new model or build is a line in
   `models/models.txt` with its size and SHA-256 from the Hub, a section in `models/presets.ini` with
   its publisher's sampling, and a row in MODELS.md.
+- The list of servers to test comes from Anchor Terminal's public API (`anchor-lab targets`), and
+  what the lab finds is filed as `research/<model>/<company>/<tool>/<run>/` (`journal.Folder`).
 - Decisions go into DESIGN.md in the same pull request, with the reason.

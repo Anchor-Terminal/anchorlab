@@ -79,14 +79,18 @@ GPU, the build, eight models, and one `llama-server` that loads whichever the ha
 
 ## Building
 
-On the machine that will send it to the box:
+On the box itself, from a clone of this repository. It's public, so the clone needs no key, and
+the box has Go for the cells anyway:
 
 ```
+git clone https://github.com/Anchor-Terminal/anchorlab && cd anchorlab
 ./build.sh                          # with the public sample bench set
 ./build.sh path/to/private.go.txt   # with a bench set of your own (see "Picking the model")
 ```
 
-It vets, runs the short tests and writes `./anchor-lab`. The box gets a binary, never a checkout.
+It vets, runs the short tests and writes `./anchor-lab`. A private bench set is one file, copied
+into `private/` on the box and named in `private/settings.env`, so `./build.sh` alone picks it up.
+Building elsewhere and copying the binary over works too.
 
 ## The list of servers to test
 
@@ -114,8 +118,7 @@ MCP server, which needs no key and has seven tools, all marked read-only.
 
 ## Putting it on the box
 
-Copy `anchor-lab`, `install.sh`, `systemd/` and `targets.json` to the box, and there, as root, run
-`install.sh` from the folder they're in. It makes the `anchorlab` and `labsync` users, installs the
+From the clone, after `./build.sh`, as root: `bash install.sh`. It makes the `anchorlab` and `labsync` users, installs the
 binary and the units, and installs nothing else. It can be run again: it replaces the binary and the
 units and leaves the state alone. It prints what's left to do by hand:
 
@@ -275,7 +278,8 @@ numbers and some fields left out:
 - `-unsafe-cells` on the box. It runs programs as plain children of the harness, for working on the
   harness on a machine with nothing to lose.
 - A model address that isn't the box itself. The harness refuses it.
-- A key, a token or a checkout of anything on the box.
+- A key, a token or a checkout of anything private on the box. A clone of this public repository is
+  fine; the private bench set is one file in `private/`, which git ignores.
 
 ## Reporting a problem
 

@@ -2,9 +2,9 @@
 // big things (code, output, what the model said) in a folder a run, and one line a finished run in
 // the file the site's server collects.
 //
-//	<state>/events/2026-11-15.ndjson   every event of every run, in order; tail -f follows the lab
-//	<state>/runs/<run>/                code-1.go, output-1.txt, model-1.txt, tools.json
-//	<state>/results.ndjson             one Result a finished run; `anchor-lab export` reads it
+//	<state>/events/2026-11-15.ndjson                       every event of every run, in order; tail -f follows the lab
+//	<state>/research/<model>/<company>/<tool>/<run>/       code-1.go, output-1.txt, model-1.txt, tools.json
+//	<state>/results.ndjson                                 one Result a finished run; `anchor-lab sync export` reads it
 //
 // Only results.ndjson leaves the box, and a Result holds numbers, names from fixed lists and the
 // server's own tool names: no sentence a model or a tool wrote (DESIGN.md).
@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,7 +31,8 @@ type Result struct {
 	V       string    `json:"v"`
 	Run     string    `json:"run"`
 	Slug    string    `json:"slug"`
-	Task    string    `json:"task"` // connect | explore
+	Company string    `json:"company,omitempty"` // the company's id from the list, "" when the list had none
+	Task    string    `json:"task"`              // connect | explore
 	Started time.Time `json:"started"`
 	Ended   time.Time `json:"ended"`
 	Harness string    `json:"harness"`
@@ -92,15 +94,16 @@ type Journal struct {
 	dir string
 	now func() time.Time
 
-	mu  sync.Mutex
-	day string
-	f   *os.File
-	seq uint64
+	mu     sync.Mutex
+	day    string
+	f      *os.File
+	seq    uint64
+	places map[string]string // run → its folder under research/
 }
 
 // Open makes the folders under dir and returns a journal that appends to them.
 func Open(dir string) (*Journal, error) {
-	for _, d := range []string{"events", "runs"} {
+	for _, d := range []string{"events", "research"} {
 		if err := os.MkdirAll(filepath.Join(dir, d), 0o750); err != nil {
 			return nil, err
 		}
@@ -140,9 +143,54 @@ func (j *Journal) Event(run, ev string, fields map[string]any) {
 	j.f.Sync()
 }
 
+// Folder is where a run's files go, under the state: research/<model>/<company>/<tool>/<run>, by
+// model first so one model's work can be read, compared or deleted as a whole. A run with no model
+// (connect only) goes under no-model, and one whose list didn't name a company under unknown. Each
+// part is cut down to letters, digits, dots, dashes and underscores, so no name from a list or a
+// setting can reach outside the folder.
+func Folder(model, company, tool, run string) string {
+	return filepath.Join("research", part(model, "no-model"), part(company, "unknown"), part(tool, "unknown"), part(run, "run"))
+}
+
+func part(s, empty string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_') {
+			b[i] = '-'
+		}
+	}
+	out := strings.Trim(string(b), ".-")
+	if out == "" || len(out) > 120 {
+		return empty
+	}
+	return out
+}
+
+// Place says which folder a run's files go in (Folder). A run that wasn't placed goes under
+// research/no-model/unknown/unknown/<run>.
+func (j *Journal) Place(run, model, company, tool string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.places == nil {
+		j.places = map[string]string{}
+	}
+	j.places[run] = Folder(model, company, tool, run)
+}
+
+// RunDir is the run's folder, under the state.
+func (j *Journal) RunDir(run string) string {
+	j.mu.Lock()
+	rel, ok := j.places[run]
+	j.mu.Unlock()
+	if !ok {
+		rel = Folder("", "", "", run)
+	}
+	return filepath.Join(j.dir, rel)
+}
+
 // Artifact keeps something too big for an event line in the run's folder. It stays on the box.
 func (j *Journal) Artifact(run, name string, b []byte) {
-	dir := filepath.Join(j.dir, "runs", run)
+	dir := j.RunDir(run)
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return
 	}

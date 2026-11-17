@@ -156,8 +156,15 @@ done
 sudo -u anchorlab anchor-lab bench -compare
 ```
 
-The winner's name goes in `/etc/anchor-lab/env` as `ANCHOR_LAB_MODEL`, then
-`systemctl restart anchor-lab`. Bench them with the private set (`build.sh <file>`, README.md):
+Then switch to the winner, or to any of them whenever we decide:
+
+```
+anchor-lab model                        # which one the lab uses, and which the server has loaded
+sudo anchor-lab model use gpt-oss-120b  # checks, saves it in /etc/anchor-lab/env, loads it, restarts the lab
+```
+
+Each model's runs are filed under its own folder, `research/<model>/...`, so switching never mixes
+two models' work. Bench them with the private set (`build.sh <file>`, README.md):
 the public sample is too small to pick a model on.
 
 ## 7. Faster, optionally

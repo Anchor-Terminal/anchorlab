@@ -100,7 +100,7 @@ func TestExploreEndToEnd(t *testing.T) {
 			return a, nil
 		},
 	}
-	results := Run(context.Background(), o, targets.Target{Slug: "fake-mcp", Name: "Fake", URL: srv.URL})
+	results := Run(context.Background(), o, targets.Target{Slug: "fake-mcp", Name: "Fake", URL: srv.URL, Company: "fake.example"})
 	if len(results) != 2 {
 		t.Fatalf("%d results, want connect and explore", len(results))
 	}
@@ -146,7 +146,7 @@ func TestExploreEndToEnd(t *testing.T) {
 		t.Errorf("events:\n got %s\nwant %s", got, want)
 	}
 	for _, name := range []string{"tools.json", "model-1.txt", "code-1.go", "output-1.txt", "code-2.go"} {
-		if _, err := os.Stat(filepath.Join(state, "runs", e.Run, name)); err != nil {
+		if _, err := os.Stat(filepath.Join(state, journal.Folder(o.Model, "fake.example", "fake-mcp", e.Run), name)); err != nil {
 			t.Errorf("no %s in the run's folder", name)
 		}
 	}

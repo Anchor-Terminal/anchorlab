@@ -7,7 +7,8 @@
 //	anchor-lab sync      what the site's server may ask over SSH: "export N" or "targets"
 //	anchor-lab stats     numbers about the lab over HTTP, for the site's admin page and nobody else
 //	anchor-lab status    the lab from a terminal: on the box, or -from the box's stats
-//	anchor-lab targets   on the site's server: write the list of servers to test from the listings
+//	anchor-lab model     which model the lab uses; `model use <name>` switches it
+//	anchor-lab targets   write the list of servers to test, from Anchor Terminal's public API
 //	anchor-lab version
 package main
 
@@ -44,7 +45,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | targets | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | model | targets | version")
 		os.Exit(2)
 	}
 	var err error
@@ -62,6 +63,8 @@ func main() {
 		err = statsCmd(args)
 	case "status":
 		err = statusCmd(args, os.Stdout)
+	case "model":
+		err = modelCmd(args, os.Stdout)
 	case "targets":
 		err = targetsCmd(args)
 	case "version":
@@ -378,10 +381,34 @@ func export(state string, after int, w io.Writer) error {
 
 func targetsCmd(args []string) error {
 	fs := flag.NewFlagSet("targets", flag.ExitOnError)
-	data := fs.String("data", "data", "the repository's data directory")
-	snap := fs.String("snapshot", "", "anchor-server's snapshot.json: with it, the targets are the servers that already list their tools to the site's probe without a key")
+	from := fs.String("from", targets.API, "Anchor Terminal's tools.json: its address, or a file saved from it")
 	fs.Parse(args)
-	f, err := targets.FromData(*data, *snap, time.Now())
+	var r io.Reader
+	if strings.HasPrefix(*from, "https://") || strings.HasPrefix(*from, "http://") {
+		cl := &http.Client{Timeout: 3 * time.Minute}
+		req, err := http.NewRequest("GET", *from, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("User-Agent", "anchor-lab/"+version+" (+https://github.com/Anchor-Terminal/anchorlab)")
+		resp, err := cl.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("%s answered HTTP %d", *from, resp.StatusCode)
+		}
+		r = io.LimitReader(resp.Body, 512<<20)
+	} else {
+		fh, err := os.Open(*from)
+		if err != nil {
+			return err
+		}
+		defer fh.Close()
+		r = fh
+	}
+	f, err := targets.FromAPI(r, time.Now())
 	if err != nil {
 		return err
 	}

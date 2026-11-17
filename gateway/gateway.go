@@ -60,9 +60,10 @@ type Tool struct {
 
 var protocolDate = regexp.MustCompile(`^20[0-9]{2}-[0-9]{2}-[0-9]{2}$`)
 
-// mutating is how a tool that changes something tends to be named. A tool the server marks
-// read-only is called whatever its name; one it marks destructive never is.
-var mutating = regexp.MustCompile(`(?i)(^|[_.\-/])(create|delete|remove|update|write|send|post|publish|pay|purchase|buy|order|book|cancel|transfer|deploy|execute|exec|run|insert|upsert|drop|invite|upload|edit|set|add|put|patch|register|subscribe|unsubscribe|email|sms|call|tweet|reply|comment|commit|push|merge|approve|sign|mint|swap|trade|withdraw|deposit)([_.\-/]|$)`)
+// mutating is how a tool that changes something tends to be named, for servers that don't say. A
+// tool the server marks read-only is called whatever its name; one it marks destructive, or marks
+// as not read-only, never is.
+var mutating = regexp.MustCompile(`(?i)(^|[_.\-/])(create|delete|remove|update|write|send|submit|post|publish|pay|purchase|buy|order|book|cancel|transfer|deploy|execute|exec|run|insert|upsert|drop|invite|upload|edit|set|add|put|patch|register|subscribe|unsubscribe|email|sms|call|tweet|reply|comment|commit|push|merge|approve|sign|mint|swap|trade|withdraw|deposit)([_.\-/]|$)`)
 
 // Callable says whether the lab calls this tool, and why not when it doesn't.
 func Callable(t Tool) (bool, string) {
@@ -70,8 +71,13 @@ func Callable(t Tool) (bool, string) {
 		if a.Destructive != nil && *a.Destructive {
 			return false, "the server marks it destructive"
 		}
-		if a.ReadOnly != nil && *a.ReadOnly {
-			return true, ""
+		if a.ReadOnly != nil {
+			if *a.ReadOnly {
+				return true, ""
+			}
+			// readOnlyHint false is the server saying the tool changes something, whatever it's
+			// called: submit_review, file_issue, contact
+			return false, "the server marks it as changing something"
 		}
 	}
 	if mutating.MatchString(t.Name) {

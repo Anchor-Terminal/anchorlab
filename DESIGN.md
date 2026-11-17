@@ -58,10 +58,14 @@ small, they use the standard library only, and they treat everything above as da
   forms that wrap any of those are refused, whatever DNS or a redirect says. Redirects aren't
   followed. The environment's proxy is never used. No header, cookie or credential comes from the
   model or the program.
-- **Tools that change something are never called.** One the server marks destructive, or one named
-  like a change (`create_`, `delete_`, `send_`, `pay_` and the rest of the list in `gateway.go`),
-  is listed in the result as not called. One the server marks read-only is called whatever its
-  name. This costs coverage, and it's the right way round for calling other people's production
+- **Tools that change something are never called.** One the server marks destructive, or marks
+  as not read-only (`readOnlyHint: false`), is listed in the result as not called, and so is one
+  named like a change (`create_`, `delete_`, `send_`, `submit_`, `pay_` and the rest of the list
+  in `gateway.go`) on a server that doesn't say. One the server marks read-only is called whatever
+  its name. Trying the harness on Anchor Terminal's own `/mcp` is what showed the second rule was
+  missing: `submit_review`, `file_issue`, `contact` and `react_chat` are marked as not read-only,
+  aren't marked destructive, and have names the list didn't catch, so they would have been
+  called. This costs coverage, and it's the right way round for calling other people's production
   servers without asking.
 - **The numbers are the gateway's, never the model's.** Calls, errors, latency and which tool
   answered on which attempt are counted where the calls are made. The outcome is arithmetic over
@@ -73,6 +77,10 @@ small, they use the standard library only, and they treat everything above as da
   model needs to get each tool to answer, and how fast the server is when it does.
 - **The model is on the box and the prompts stay there.** The harness refuses a model address that
   isn't this machine.
+- **A terminal can ask the lab how it's going.** `anchor-lab status` reads the state on the box,
+  or asks `anchor-lab stats` from the machine it lets ask, and prints the run in progress, today's
+  counts, the machine and the latest results. It's the same numbers as the admin page, so nothing
+  new leaves the box.
 - **Everything is written down as it happens.** One file of events a day, appended and synced a
   line at a time, so `tail -f` is the lab's live view. The programs, their output and the model's
   replies are kept in a folder a run. One line a finished run goes to `results.ndjson`.

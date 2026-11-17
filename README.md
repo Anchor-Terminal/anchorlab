@@ -23,9 +23,11 @@ go test ./...          # also compiles and runs real programs in the cell's code
 
 ## How a test runs
 
-1. The harness opens the server under test and lists its tools. Tools named like a change
-   (`create_`, `delete_`, `send_`, `pay_` and the rest in `gateway/gateway.go`), or marked
-   destructive, are never called.
+1. The harness opens the server under test and lists its tools. A tool the server marks
+   destructive, or marks as not read-only, is never called. For a server that doesn't say, a tool
+   named like a change (`create_`, `delete_`, `send_`, `submit_`, `pay_` and the rest in
+   `gateway/gateway.go`) isn't either. Anchor Terminal's own `/mcp` marks all 23 of its tools: the
+   lab would call the 13 read-only ones and leave the 10 that post, file, send or edit.
 2. The model reads the tool list and replies with a Go program. The program can do one thing to
    the outside world: `tool.Call(name, args)`, which goes down a pipe to the harness.
 3. The program is built and run in a cell: a systemd unit started for that one job, as a user made
@@ -73,12 +75,13 @@ It vets, runs the short tests and writes `./anchor-lab`. The box gets a binary, 
 
 ```json
 {"v": "anchor-lab-targets/1", "made": "2026-11-17T00:00:00Z",
- "targets": [{"slug": "exa-mcp", "name": "Exa", "url": "https://mcp.exa.ai/mcp"}]}
+ "targets": [{"slug": "anchor-terminal", "name": "Anchor Terminal", "url": "https://www.anchorterminal.com/mcp/connected"}]}
 ```
 
 Anchor Terminal makes it from its listings with
 `./anchor-lab targets -data <the site's data folder> -snapshot <its live snapshot> > targets.json`.
-For your own server, write one by hand.
+For your own server, write one by hand. The example is us: Anchor Terminal's read-only MCP server,
+which needs no key and has seven tools, all marked read-only.
 
 ## Putting it on the box
 
@@ -101,13 +104,42 @@ Stop the service and test one server by hand, watching the journal in a second t
 
 ```
 systemctl stop anchor-lab
-sudo -u anchorlab anchor-lab run -once -only exa-mcp -model <name>
+sudo -u anchorlab anchor-lab run -once -only anchor-terminal -model <name>
 tail -f /var/lib/anchor-lab/events/$(date -u +%F).ndjson
 ```
 
 If a cell can't build or run, the event says why, and `journalctl -u 'anchor-lab-cell@*'` has the
 cell's own words. The unit's system call filter is the first suspect: a refused call shows as
 "operation not permitted" in the build output.
+
+## Talking to the lab
+
+`anchor-lab status` is the lab from a terminal: what it's testing now, today's counts, the machine,
+and the latest results.
+
+```
+sudo anchor-lab status                            # on the box: reads the state itself
+anchor-lab status -from http://<the box>:8790     # from the machine the box lets ask (the stats below)
+anchor-lab status -watch                          # again every 10 seconds, until Ctrl-C
+anchor-lab status -json                           # the stats as they are, for a script
+```
+
+```
+anchor-lab 2026.11.17-1400 · model gpt-oss-120b · 61 targets · last event 40 s ago
+
+now      anchor-terminal, exploring, turn 2, 4 calls (1 error), started 3 min ago
+today    19 servers (16 opened, 3 didn't) · 15 explored: 6 every tool, 7 some, 2 none
+         142 calls (21 errors) · 50 programs (7 didn't build) · model 41 min, 445,000 tokens
+machine  load 3.42 2.91 2.10 · memory 39 GB of 124 GB free · GPU 91% 64°C 118W, GTT 67 GB of 100 GB
+         / 82 GB of 98 GB free · /var 467 GB of 492 GB free · up 5.1 h
+
+latest (38 kept on the box)
+  ended             listing          task                    status  outcome  tools      calls      p50/p95
+  2026-11-17 13:07  anchor-terminal  explore · gpt-oss-120b  ok      partial  5/6 of 7   11 (3 err) 240/900 ms
+```
+
+`ANCHOR_LAB_STATS_URL` set to the box's address saves typing `-from` each time. `tail -f` on
+today's events file is the raw view of the same thing.
 
 ## The admin page's numbers
 
@@ -157,9 +189,9 @@ A line of `results.ndjson` (format `anchor-lab-result/1`, `journal/journal.go`),
 numbers and some fields left out:
 
 ```
-{"v":"anchor-lab-result/1","run":"20261115T021400-exa-mcp","slug":"exa-mcp","task":"explore","model":"gpt-oss-120b",
- "status":"ok","tools":4,"outcome":"partial","calls":9,"errors":3,"p50Ms":640,"p95Ms":2100,"toolsTried":4,"toolsOk":3,
- "turns":4,"builds":4,"buildFails":1,"perTool":[{"name":"web_search_exa","calls":2,"ok":1,"errors":1,"firstOk":2,"medianMs":610}]}
+{"v":"anchor-lab-result/1","run":"20261117T021400-anchor-terminal","slug":"anchor-terminal","task":"explore","model":"gpt-oss-120b",
+ "status":"ok","tools":7,"outcome":"partial","calls":11,"errors":3,"p50Ms":240,"p95Ms":900,"toolsTried":6,"toolsOk":5,
+ "turns":4,"builds":4,"buildFails":1,"perTool":[{"name":"search_tools","calls":2,"ok":1,"errors":1,"firstOk":2,"medianMs":210}]}
 ```
 
 ## Never

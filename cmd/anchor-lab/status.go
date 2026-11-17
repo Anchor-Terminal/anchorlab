@@ -167,8 +167,8 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 
 	d := s.Today
 	explored := d.Outcomes["success"] + d.Outcomes["partial"] + d.Outcomes["failure"] + d.Outcomes["none"]
-	fmt.Fprintf(w, "today    %s (%d opened, %d didn't) · %d explored: %d every tool, %d some, %d none\n",
-		plural(d.Runs, "server"), d.Connected, d.ConnectFails, explored, d.Outcomes["success"], d.Outcomes["partial"], d.Outcomes["failure"])
+	fmt.Fprintf(w, "today    %s (%d opened, %d didn't) · %d explored: %d every tool, %d some, %d none, %d want a key to call\n",
+		plural(d.Runs, "server"), d.Connected, d.ConnectFails, explored, d.Outcomes["success"], d.Outcomes["partial"], d.Outcomes["failure"], d.Keyed)
 	fmt.Fprintf(w, "         %s (%s) · %s (%d didn't build) · model %s, %s tokens\n",
 		plural(d.Calls, "call"), plural(d.CallErrors, "error"), plural(d.Programs, "program"), d.BuildFails, dur(d.ModelMs), thousands(d.PromptTokens+d.OutputTokens))
 

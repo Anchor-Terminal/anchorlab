@@ -83,7 +83,7 @@ func TestSessionCallsAndRefuses(t *testing.T) {
 	if r := s.CallTool(ctx, "echo", json.RawMessage(`{"q":"x"}`)); !r.OK || r.Text != "hello" || string(r.Data) != `{"n":1}` {
 		t.Errorf("echo: %+v", r)
 	}
-	if r := s.CallTool(ctx, "boom", nil); r.OK || r.Error == "" || r.Text != "bad arguments" {
+	if r := s.CallTool(ctx, "boom", nil); r.OK || !strings.Contains(r.Error, "bad arguments") || r.Text != "bad arguments" {
 		t.Errorf("boom: %+v", r)
 	}
 	if r := s.CallTool(ctx, "slow", nil); !r.OK || r.Text != "streamed" {
@@ -228,5 +228,59 @@ func TestCallableByAnnotation(t *testing.T) {
 		if got, _ := Callable(c.t); got != c.want {
 			t.Errorf("%s: callable %v, want %v", c.t.Name, got, c.want)
 		}
+	}
+}
+
+// A server that lists its tools to anyone and wants a key to run them: the call's status is auth,
+// the program reads what the server said, and after two refusals with nothing working the lab
+// stops sending it calls for the run.
+func TestKeyedServer(t *testing.T) {
+	allowLoopback = true
+	defer func() { allowLoopback = false }()
+	sent := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &req)
+		switch req.Method {
+		case "initialize":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"keyed"}}}`, req.ID)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[{"name":"search"},{"name":"lookup"}]}}`, req.ID)
+		case "tools/call":
+			sent++
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte("{\"error\":\"missing API key\"}\n"))
+		}
+	}))
+	defer srv.Close()
+	lim := DefaultLimits
+	lim.MinInterval = 0
+	s, _, err := Open(context.Background(), srv.URL, "anchor-lab/test", lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	ctx := context.Background()
+	r := s.CallTool(ctx, "search", nil)
+	if r.OK || !strings.Contains(r.Error, "HTTP 401") || !strings.Contains(r.Error, "missing API key") {
+		t.Errorf("first: %+v", r)
+	}
+	s.CallTool(ctx, "lookup", nil)
+	r = s.CallTool(ctx, "search", json.RawMessage(`{"q":"x"}`))
+	if r.OK || !strings.Contains(r.Error, "wants a key") || sent != 2 {
+		t.Errorf("third: sent %d, %+v", sent, r)
+	}
+	var st []string
+	for _, c := range s.Calls() {
+		st = append(st, c.Status)
+	}
+	if strings.Join(st, " ") != "auth auth keyed" {
+		t.Errorf("statuses: %v", st)
 	}
 }

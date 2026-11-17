@@ -54,7 +54,9 @@ go test ./...          # also compiles and runs real programs in the cell's code
    into something can't weaken one.
 4. The harness's gateway makes each call the program asks for, to the server under test and
    nowhere else (https, a public address checked at connect time, no redirects, no proxy, no
-   credentials from the model), and counts and times it.
+   credentials from the model), and counts and times it. A server that answers two calls with 401
+   or 403 and nothing else gets no more calls that run: it wants a key, which the lab doesn't have,
+   and its result says so (`auth`) rather than counting against the model.
 5. What the program printed goes back to the model, up to six replies. The outcome is arithmetic
    over the gateway's counts, never the model's opinion.
 

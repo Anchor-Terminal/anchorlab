@@ -84,6 +84,7 @@ type Today struct {
 	PromptTokens int64          `json:"promptTokens"`
 	OutputTokens int64          `json:"outputTokens"`
 	Outcomes     map[string]int `json:"outcomes"` // explore results today: success | partial | failure | none
+	Keyed        int            `json:"keyed"`    // of those, servers that answered every call with "you need a key"
 	Statuses     map[string]int `json:"statuses"` // connect results today: ok | auth | unreachable | refused | error
 }
 
@@ -229,6 +230,9 @@ func results(state string, t time.Time, s *Stats) finishedRuns {
 		if r.Ended.UTC().Format("2006-01-02") == day {
 			if r.Task == "explore" {
 				s.Today.Outcomes[word(r.Outcome, outcomes)]++
+				if r.Status == "auth" {
+					s.Today.Keyed++
+				}
 			} else {
 				s.Today.Statuses[word(r.Status, statuses)]++
 			}

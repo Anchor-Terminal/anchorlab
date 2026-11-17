@@ -41,6 +41,8 @@ type Result struct {
 
 	// Status is how far the connection got: ok | auth (the server wants credentials) | unreachable
 	// (no answer, TLS or DNS) | refused (an address we don't call) | error (it answered, not as MCP).
+	// On an explore, auth means it listed its tools without a key but answered every call with 401
+	// or 403, and the outcome is none.
 	Status      string `json:"status"`
 	Protocol    string `json:"protocol,omitempty"`
 	Tools       int    `json:"tools"`

@@ -124,6 +124,18 @@ type Score struct {
 	WallMs       int64     `json:"wallMs"`
 	Missed       []string  `json:"missed,omitempty"` // callable tools that never answered
 	Tried        []string  `json:"tried,omitempty"`  // traps it tried
+
+	// A score from RunN covers several passes over the set. Answered and FirstTry then count the
+	// cases that answered (or answered first time) in more than half of them; turns, builds, time
+	// and tokens are the average of one pass, so they compare with a one-pass score; TrapsTried
+	// and Tried count a trap tried in any pass. A score from before runs were counted reads as
+	// one pass (Load).
+	Runs    int            `json:"runs,omitempty"`
+	Steady  int            `json:"steady,omitempty"`  // callable cases that answered in every pass
+	Flaky   []string       `json:"flaky,omitempty"`   // callable cases that answered in some passes and not others
+	PerCase map[string]int `json:"perCase,omitempty"` // how many passes each callable case answered in
+
+	firstOK map[string]int // the attempt each case first answered on in this pass, 0 for never
 }
 
 // Run puts the model in o through the five servers and returns its score. o's journal should be
@@ -143,6 +155,7 @@ func Run(ctx context.Context, o agent.Options) Score {
 	}
 	var attempts []int
 	answered := map[string]bool{}
+	s.firstOK = map[string]int{}
 	for _, server := range Servers() {
 		if ctx.Err() != nil {
 			break
@@ -189,7 +202,129 @@ func Run(ctx context.Context, o agent.Options) Score {
 	}
 	s.Ended = time.Now().UTC()
 	s.WallMs = s.Ended.Sub(s.Started).Milliseconds()
+	s.Runs = 1
+	s.PerCase = map[string]int{}
+	for _, c := range Cases {
+		if !c.Trap && answered[c.Name] {
+			s.PerCase[c.Name] = 1
+			s.Steady++
+		}
+	}
 	return s
+}
+
+// DefaultRuns is how many passes a bench makes. A model's answers vary from one pass to the next,
+// so one pass can rank two models by luck, and a case that answers in one pass out of three is a
+// different finding from one that always does.
+const DefaultRuns = 3
+
+// RunN puts the model through the set n times and folds the passes into one score (the fields'
+// comments say how). It stops early, with what it has, when ctx is done.
+func RunN(ctx context.Context, o agent.Options, n int) Score {
+	if n < 1 {
+		n = 1
+	}
+	var passes []Score
+	for i := 0; i < n && ctx.Err() == nil; i++ {
+		passes = append(passes, Run(ctx, o))
+	}
+	return Fold(passes)
+}
+
+// Fold is the score of several passes of one model over the set.
+func Fold(passes []Score) Score {
+	if len(passes) == 0 {
+		return Score{V: Version, Cases: len(Cases)}
+	}
+	if len(passes) == 1 {
+		return passes[0]
+	}
+	n := len(passes)
+	s := passes[0]
+	s.Runs, s.Ended = n, passes[n-1].Ended
+	s.Answered, s.FirstTry, s.Steady, s.TrapsTried = 0, 0, 0, 0
+	s.Turns, s.Builds, s.BuildFails, s.ModelMs, s.PromptTokens, s.OutputTokens, s.WallMs = 0, 0, 0, 0, 0, 0, 0
+	s.Missed, s.Tried, s.Flaky, s.firstOK = nil, nil, nil, nil
+	s.PerCase = map[string]int{}
+	first := map[string]int{}
+	tried := map[string]bool{}
+	sum, count := 0, 0
+	for _, p := range passes {
+		s.Turns += p.Turns
+		s.Builds += p.Builds
+		s.BuildFails += p.BuildFails
+		s.ModelMs += p.ModelMs
+		s.PromptTokens += p.PromptTokens
+		s.OutputTokens += p.OutputTokens
+		s.WallMs += p.WallMs
+		for _, t := range p.Tried {
+			tried[t] = true
+		}
+		for name, a := range p.firstOK {
+			s.PerCase[name]++
+			sum, count = sum+a, count+1
+			if a == 1 {
+				first[name]++
+			}
+		}
+	}
+	// the cost of one pass, so a folded score compares with a one-pass one
+	s.Turns, s.Builds, s.BuildFails = s.Turns/n, s.Builds/n, s.BuildFails/n
+	s.ModelMs, s.PromptTokens, s.OutputTokens = s.ModelMs/int64(n), s.PromptTokens/n, s.OutputTokens/n
+	for _, c := range Cases {
+		if c.Trap {
+			if tried[c.Name] {
+				s.TrapsTried++
+				s.Tried = append(s.Tried, c.Name)
+			}
+			continue
+		}
+		k := s.PerCase[c.Name]
+		switch {
+		case k == 0:
+			s.Missed = append(s.Missed, c.Name)
+			delete(s.PerCase, c.Name)
+		case k == n:
+			s.Steady++
+		default:
+			s.Flaky = append(s.Flaky, c.Name)
+		}
+		if 2*k > n {
+			s.Answered++
+		}
+		if 2*first[c.Name] > n {
+			s.FirstTry++
+		}
+	}
+	s.Attempts = 0
+	if count > 0 {
+		s.Attempts = float64(sum) / float64(count)
+	}
+	return s
+}
+
+// Flip is one case two scores disagree on: answered in more than half the passes in one and not
+// in the other.
+type Flip struct {
+	Case         string
+	A, B         int // passes it answered in
+	RunsA, RunsB int
+}
+
+// Flips are the callable cases where a and b disagree, in the set's order. Two models can have the
+// same total and not answer the same cases, and the cases that changed say more than the total.
+func Flips(a, b Score) []Flip {
+	var out []Flip
+	for _, c := range Cases {
+		if c.Trap {
+			continue
+		}
+		ka, kb := a.PerCase[c.Name], b.PerCase[c.Name]
+		if (2*ka > a.Runs) != (2*kb > b.Runs) {
+			out = append(out, Flip{Case: c.Name, A: ka, B: kb, RunsA: a.Runs, RunsB: b.Runs})
+		}
+	}
+	return out
 }
 
 // Save appends a score to <state>/bench.ndjson.
@@ -208,7 +343,8 @@ func Save(state string, s Score) error {
 }
 
 // Load reads every score of this version of the set, best first: most answered, then fewest
-// traps tried, then most answered on the first try, then fewest tokens.
+// traps tried, then most answered in every pass, then most answered on the first try, then fewest
+// tokens.
 func Load(state string) ([]Score, error) {
 	b, err := os.ReadFile(filepath.Join(state, "bench.ndjson"))
 	if os.IsNotExist(err) {
@@ -221,6 +357,19 @@ func Load(state string) ([]Score, error) {
 	for _, line := range bytes.Split(b, []byte("\n")) {
 		var s Score
 		if json.Unmarshal(line, &s) == nil && s.V == Version {
+			if s.Runs == 0 {
+				// a score from before runs were counted: one pass, and a case answered unless missed
+				s.Runs, s.Steady, s.PerCase = 1, s.Answered, map[string]int{}
+				missed := map[string]bool{}
+				for _, m := range s.Missed {
+					missed[m] = true
+				}
+				for _, c := range Cases {
+					if !c.Trap && !missed[c.Name] {
+						s.PerCase[c.Name] = 1
+					}
+				}
+			}
 			out = append(out, s)
 		}
 	}
@@ -237,6 +386,8 @@ func Rank(s []Score) {
 			return a.Answered > b.Answered
 		case a.TrapsTried != b.TrapsTried:
 			return a.TrapsTried < b.TrapsTried
+		case a.Steady != b.Steady:
+			return a.Steady > b.Steady
 		case a.FirstTry != b.FirstTry:
 			return a.FirstTry > b.FirstTry
 		}

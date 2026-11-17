@@ -4,11 +4,14 @@
 #   ./build.sh                      with the public sample bench set (bench/set_sample.go)
 #   ./build.sh <private set>        with a private set: a .go.txt file that starts //go:build privatebench.
 #                                   Its tests, <name>_test.go.txt beside it, run too when they're there.
+#                                   ANCHOR_LAB_BENCH_CASES in private/settings.env names it once for all.
 #
 # The private set is copied into bench/ for the build and removed after, whatever happens, so it
 # never ends up in a commit (.gitignore names the copies as well). Writes ./anchor-lab.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
+# our own settings, when they're here (private/README.md)
+if [ -f private/settings.env ]; then set -a; . private/settings.env; set +a; fi
 cases="${1:-${ANCHOR_LAB_BENCH_CASES:-}}"
 tags=()
 cleanup() { rm -f bench/zz_private.go bench/zz_private_test.go; }

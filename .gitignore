@@ -39,3 +39,8 @@ bench/zz_private_test.go
 # the binary build.sh writes
 /anchor-lab
 /targets.json
+
+# our own things, never public (private/README.md): results, settings, presets, notes
+private/*
+!private/README.md
+!private/settings.example.env

@@ -77,6 +77,23 @@ small, they use the standard library only, and they treat everything above as da
   model needs to get each tool to answer, and how fast the server is when it does.
 - **The model is on the box and the prompts stay there.** The harness refuses a model address that
   isn't this machine.
+- **One machine with unified memory, more as it pays.** A Ryzen AI Max+ 395 with 128 GB, about 100
+  GB of it the GPU's: the cheapest unified-memory machine of that size we could find. Bandwidth is
+  what it gives up, so mixture-of-experts models are the ones it runs fast. More machines come as the
+  lab earns its keep; each runs its own copy of the harness.
+- **The model's settings are the model's.** One `llama-server` in router mode serves every model the
+  lab may use and loads the one a request names, so the bench can go through them all without a
+  restart. Each model's sampling is its publisher's recommendation, in the server's presets
+  (`models/presets.ini`), and the harness sends no temperature unless `ANCHOR_LAB_TEMPERATURE` sets
+  one. It used to send 0.2 for every model, which overrode what every one of the eight publishers
+  recommends (about 1.0) and is low enough to make a thinking model loop. Thinking is capped at
+  2,048 tokens so a model that thinks still has room in a 4,096-token reply for the program.
+- **The model files are pinned.** `models/models.txt` has each file's size and SHA-256 as the Hub
+  gave it, and `models/fetch.sh` refuses a file that doesn't match. A publisher replacing a file is
+  something to look at, not something to pick up quietly.
+- **Our own things live in `private/`, which git ignores.** Results and transcripts copied off the
+  box, our settings and presets, notes. The scripts read `private/settings.env` when it's there, so
+  nothing about our machines is written into the public code, and one checkout holds both.
 - **A terminal can ask the lab how it's going.** `anchor-lab status` reads the state on the box,
   or asks `anchor-lab stats` from the machine it lets ask, and prints the run in progress, today's
   counts, the machine and the latest results. It's the same numbers as the admin page, so nothing
@@ -221,6 +238,9 @@ real run, because the page should be shaped by what the results look like.
 - `stats`: what the admin page sees, and the server that answers it.
 - `brain`, `targets`.
 - `systemd`, `install.sh`: the units and the one script root runs on the box.
+- `MODELS.md`, `models/`: the models, their pinned files, the server's presets, and the scripts that
+  fetch them and set the server up.
+- `private/`: ignored by git; our results, settings and notes.
 - `build.sh`: vet, test and build, with a private bench set or without.
 
 ## What was run, and what wasn't

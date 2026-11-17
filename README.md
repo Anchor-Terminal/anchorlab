@@ -16,6 +16,24 @@ get each one to answer?). Hosted MCP servers only, and only ones that need no ke
 
 Go, standard library only. MIT licence.
 
+## What it runs on, and why
+
+One machine for now: a Minisforum MS-S1 Max, with an AMD Ryzen AI Max+ 395 (Strix Halo), 128 GB of
+unified memory with about 100 GB of it given to the GPU, and 4 TB of disk, on Debian 13. It sits
+beside the server that runs anchorterminal.com, on the same switch. It can reach the internet and
+nothing else on the local network, and the only way in is from that server. The models run on it
+with llama.cpp over Vulkan, one at a time; `MODELS.md` has which ones and how.
+
+Why this machine: what decides which models a machine can run is how much memory its GPU can use,
+and unified memory lets the GPU use most of the machine's. This was the cheapest machine with
+128 GB of unified memory we could find, cheaper than any other unified-memory machine of that size
+for running models locally. The trade is speed. Its memory bandwidth is 256 GB/s, so a dense model
+reads all of itself for every token and is slow, and the mixture-of-experts models, which read only
+their active part, are the ones that run well.
+
+We plan to add machines as the lab earns its keep. The harness doesn't need changing for that: each
+box runs its own copy, tests its own list and is collected the same way.
+
 ```
 go test -short ./...   # a few seconds
 go test ./...          # also compiles and runs real programs in the cell's code
@@ -55,8 +73,9 @@ person to read.
 | The collecting server | `build.sh`, and `anchor-lab targets` to write the list of servers to test | anyone |
 
 The box needs Debian or another systemd distribution, Go (the cells compile the programs with it),
-and a model served on the box itself in the OpenAI chat format (llama.cpp's `llama-server` does).
-The harness refuses a model address that isn't the box: the prompts hold strangers' text.
+and a model served on the box itself in the OpenAI chat format. The harness refuses a model address
+that isn't the box: the prompts hold strangers' text. `MODELS.md` sets that up with llama.cpp: the
+GPU, the build, eight models, and one `llama-server` that loads whichever the harness asks for.
 
 ## Building
 
@@ -90,9 +109,11 @@ Copy `anchor-lab`, `install.sh`, `systemd/` and `targets.json` to the box, and t
 binary and the units, and installs nothing else. It can be run again: it replaces the binary and the
 units and leaves the state alone. It prints what's left to do by hand:
 
-1. The model's name in `/etc/anchor-lab/env` (`ANCHOR_LAB_MODEL=`), as the model's server knows it.
-   The harness speaks to `http://127.0.0.1:8080/v1` unless `ANCHOR_LAB_MODEL_URL` says another
-   address on the same machine. With no model, only `connect` runs, which is a fine first day.
+1. The model's name in `/etc/anchor-lab/env` (`ANCHOR_LAB_MODEL=`), as the model's server knows it
+   (the names in `MODELS.md`). The harness speaks to `http://127.0.0.1:8080/v1` unless
+   `ANCHOR_LAB_MODEL_URL` says another address on the same machine. It sends no temperature, so the
+   server's setting for each model applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. With no
+   model, only `connect` runs, which is a fine first day.
 2. The first list: `install -o anchorlab -g anchorlab -m 0640 targets.json /var/lib/anchor-lab/inbox/targets.json`.
 3. For a server to collect results: its public key in `/var/lib/labsync/.ssh/authorized_keys`, on
    one line that starts `restrict,command="/usr/local/bin/anchor-lab sync" `, and `labsync` added
@@ -167,12 +188,25 @@ sudo -u anchorlab anchor-lab bench -model gemma-4-31b
 sudo -u anchorlab anchor-lab bench -compare
 ```
 
+`MODELS.md`, "Picking one", runs all eight in one go.
+
 This repository has a sample set (`bench/set_sample.go`): ten tools on two servers, each kind of
 trouble at least once. The fifty Anchor Terminal picks its model with are kept private, because a
 public set of known answers is one a model can be tuned to. To bench on cases nobody has seen, write
 your own the same way: a file that starts `//go:build privatebench`, in `package bench`, defining
 `Version`, `Cases` and `Right`, and build with `./build.sh <your file>`. A `_test.go.txt` file beside
 it with the same name runs with the build.
+
+## The private folder
+
+`private/` is ignored by git except for its README and an example settings file. It's where our own
+things go, next to the code but never in the public repository: results and transcripts copied off
+the box, `private/settings.env` (the bench set's path, the models folder), our own model presets,
+notes. `build.sh`, `models/fetch.sh` and `models/install.sh` read `private/settings.env` when it's
+there, and `models/install.sh` uses `private/presets.ini` in place of `models/presets.ini` when that
+is. Why there's a private folder in a public repository at all: one checkout holds both, and the
+scripts find our settings without anything about our machines being written into the code.
+`private/README.md` says what goes where.
 
 ## The files on the box
 

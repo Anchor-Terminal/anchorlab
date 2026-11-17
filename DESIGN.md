@@ -91,6 +91,18 @@ small, they use the standard library only, and they treat everything above as da
 - **The model files are pinned.** `models/models.txt` has each file's size and SHA-256 as the Hub
   gave it, and `models/fetch.sh` refuses a file that doesn't match. A publisher replacing a file is
   something to look at, not something to pick up quietly.
+- **Debian first.** Everything on the box comes from Debian's own archive, trixie and then
+  trixie-backports, unless there's no way round it. One source of packages means one place
+  security updates come from, one key that signs them, and nothing that updates itself behind
+  apt's back. So: Go, the kernel, the GPU firmware and Mesa are Debian's (the last three from
+  backports, for this chip), and no third-party apt repository, install script, pip, npm, snap or
+  downloaded binary goes on the box. Two things come from elsewhere because they have to:
+  - **llama.cpp, built from its source.** Debian packages it only in testing and unstable, and that
+    build is too old for what the lab uses (router mode, presets, the newest models). It's built
+    with Debian's compiler against Debian's Vulkan libraries, and the day trixie-backports carries
+    a recent enough llama.cpp, the source build goes.
+  - **The model files, from Hugging Face.** Debian doesn't package models. Each file is pinned by
+    its SHA-256 in `models/models.txt`, so what's downloaded is exactly what was checked.
 - **The box builds from a clone of this repository.** It's public, so cloning it needs no key, and
   the box already has Go for the cells. That puts updating the lab on the box (`git pull`,
   `./build.sh`, `install.sh`) with nothing copied from the site's server but the private bench set,

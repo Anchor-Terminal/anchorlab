@@ -32,4 +32,9 @@ private bench set.
   Nothing private is cloned there; the private bench set is one file in its `private/`.
 - The list of servers to test comes from Anchor Terminal's public API (`anchor-lab targets`), and
   what the lab finds is filed as `research/<model>/<company>/<tool>/<run>/` (`journal.Folder`).
+- Debian first, on the box and in every instruction here. Install from Debian's own archive
+  (trixie, then trixie-backports) and nothing else unless there's no way round it: no third-party
+  apt repositories, no install scripts piped to a shell, no pip, npm or snap, no downloaded
+  binaries. When something has to come from elsewhere, DESIGN.md says what and why. Today that's
+  llama.cpp, built from its source, and the model files from Hugging Face.
 - Decisions go into DESIGN.md in the same pull request, with the reason.

@@ -1,0 +1,53 @@
+// Package tool is how a test program reaches the server under test. The program runs with no
+// network and no files of its own: Call is the only way out, and standard output is the report.
+package tool
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"os"
+	"sync"
+)
+
+// Result is what a tool answered.
+type Result struct {
+	OK    bool            `json:"ok"`              // false when the call failed or the tool answered with an error
+	Text  string          `json:"text,omitempty"`  // the text the tool returned
+	Data  json.RawMessage `json:"data,omitempty"`  // its structured content, when it sent any
+	Error string          `json:"error,omitempty"` // why it failed, in words
+	Ms    int             `json:"ms"`              // how long the call took
+}
+
+var (
+	mu  sync.Mutex
+	out = os.NewFile(3, "requests")
+	in  = bufio.NewReaderSize(os.NewFile(4, "replies"), 1<<20)
+)
+
+// Call runs one tool by name. args is anything that marshals to a JSON object, a
+// map[string]any say, or nil for no arguments. A failed call comes back as a Result with OK
+// false and Error set; err is only for a broken connection to the lab.
+func Call(name string, args any) (Result, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	if args == nil {
+		args = map[string]any{}
+	}
+	b, err := json.Marshal(map[string]any{"tool": name, "args": args})
+	if err != nil {
+		return Result{}, err
+	}
+	if _, err := out.Write(append(b, '\n')); err != nil {
+		return Result{}, errors.New("the lab hung up")
+	}
+	line, err := in.ReadBytes('\n')
+	if err != nil {
+		return Result{}, errors.New("the lab hung up")
+	}
+	var r Result
+	if err := json.Unmarshal(line, &r); err != nil {
+		return Result{}, err
+	}
+	return r, nil
+}

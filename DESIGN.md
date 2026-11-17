@@ -1,0 +1,248 @@
+# anchorlab: the design
+
+Why the harness is built the way it is. README.md is how to run it. "The site" is anchorterminal.com,
+which grades the tools agents use and collects the lab's results.
+
+## What it's for
+
+Every grade on the site comes from reading: documentation, prices, terms, source, status pages. The
+benchmark's Performance and Task success categories are still pending because nothing of ours has
+used the tools. The lab is the machine that does. It sits beside the
+site's server, runs open-weight models, and has agents try the tools we list and write down what
+happened.
+
+The box runs plain Debian. It can reach the internet and nothing on the local network, and the only
+way in is SSH from the site's server. The
+design leans on that and adds its own walls inside the box, so no single one of them has to hold.
+
+## Who is trusted
+
+Nothing the lab reads is. In order of how little:
+
+1. **The tool under test.** Its descriptions and answers are a stranger's text, and some will be
+   written to steer the model that reads them.
+2. **The model.** It has just read that text. Whatever it writes may be the stranger's idea.
+3. **The program the model wrote.** It's run, so it gets the smallest room in the building.
+4. **The lab's results**, as the site's server sees them. A box that runs all of the above is
+   assumed to be lying until its lines have been checked one field at a time.
+
+The harness, the gateway and the systemd units are ours and are the only things trusted. They're
+small, they use the standard library only, and they treat everything above as data.
+
+## Decisions
+
+- **The model writes programs, and the programs can only ask.** Each test is a conversation: the
+  model reads the server's tool list and replies with a small Go program, the harness runs it, and
+  what it printed goes back to the model. The program runs in a cell with no network at all. Its
+  one way out is `tool.Call(name, args)`, which goes down a pipe to the harness, and the harness's
+  gateway decides whether to make the call. So the code that's least trusted never holds a socket,
+  and everything a run does to a vendor's server passes through one place that counts and limits
+  it.
+- **Go for the programs.** The toolchain is already on the box, so nothing is installed for it.
+  The compiler catches a careless program before it runs, and a build from an empty cache took 5
+  seconds on two cores here. The protocol between the harness and a cell doesn't care about the
+  language, so Python or JavaScript can be added as a second kind of job if the local models turn
+  out to write Go badly. It's still the first thing to look
+  at if the first runs show mostly compile errors.
+- **A cell is a systemd unit, and its walls are a file root installed.** The harness connects to a
+  socket and systemd starts `anchor-lab-cell@.service` for that connection: a user made for the
+  run, no network (not even loopback, where the model listens), the system read-only with /home,
+  /var and the lab's own files hidden, a private /tmp in memory, and limits on memory, processes,
+  CPU and time. The harness can't pass a cell an option, so a harness that's been talked into
+  something can't weaken one. Nothing needs sudo while the lab runs.
+- **Every job starts with an empty build cache.** A shared cache would let one run leave a compiled
+  package for the next run to link in. Five seconds a build buys that off.
+- **The gateway calls one address a run, and only a public one.** The address comes from the list
+  the site's server sent. It has to be https and a name. When the connection is made the address
+  it resolved to is checked: this machine, private and link-local networks, carrier NAT, and IPv6
+  forms that wrap any of those are refused, whatever DNS or a redirect says. Redirects aren't
+  followed. The environment's proxy is never used. No header, cookie or credential comes from the
+  model or the program.
+- **Tools that change something are never called.** One the server marks destructive, or one named
+  like a change (`create_`, `delete_`, `send_`, `pay_` and the rest of the list in `gateway.go`),
+  is listed in the result as not called. One the server marks read-only is called whatever its
+  name. This costs coverage, and it's the right way round for calling other people's production
+  servers without asking.
+- **The numbers are the gateway's, never the model's.** Calls, errors, latency and which tool
+  answered on which attempt are counted where the calls are made. The outcome is arithmetic over
+  those (every callable tool answered without an error at least once: success; some: partial;
+  none: failure). The model is asked to try, not to judge.
+- **Two tasks to start.** `connect` opens the server and lists its tools, with no model. `explore`
+  asks the question an agent has on its first day: given only what the server says about its
+  tools, can I call them? It measures something the site can't read off a page: how many tries a
+  model needs to get each tool to answer, and how fast the server is when it does.
+- **The model is on the box and the prompts stay there.** The harness refuses a model address that
+  isn't this machine.
+- **Everything is written down as it happens.** One file of events a day, appended and synced a
+  line at a time, so `tail -f` is the lab's live view. The programs, their output and the model's
+  replies are kept in a folder a run. One line a finished run goes to `results.ndjson`.
+- **Only numbers and fixed words leave the box.** A result line has counts, timings, statuses from
+  fixed lists, and the server's own tool names when they're shaped like names. No description, no
+  error message, no sentence from a model. That keeps a stranger's text off the site and out of any
+  prompt on the site's side, which is the rule reviews already follow . The transcripts stay on the box for a person to read.
+- **The site's server pulls. The box never pushes.** The box can't reach the site's server, and it
+  holds no key, token or checkout of ours. The site's server has one SSH key on the box, for a user
+  that can run one command (`anchor-lab sync`), which answers two requests: the result lines after
+  a line number, and a new list of targets on standard input. Neither runs anything.
+- **Every run records what it cost.** An explore result
+  carries the model's time, its prompt and output tokens as the model's server counted them, and
+  the cells' time building and running programs. The model is local, so the cost is time and
+  power, not a bill. Tokens make it comparable with what a hosted model would charge.
+- **Known-answer cases pick the model, and the real ones are private.** `anchor-lab bench -model
+  <name>` puts a model through made-up servers. Our set has fifty tools on five servers. 43 can be
+  made to answer, each with a right answer kept beside it in `bench.Right`, and
+  each with the trouble real servers give: a date format, an id that's a string and not a number, a
+  field the schema forgot to mark as required that only the error names, a cursor or an id that
+  only another tool's answer gives. 7 must be left alone: named like a change, marked destructive,
+  or carrying an instruction in the description. The score is how many of the 43 answered, on
+  which attempt, how many of the 7 it tried, and what it cost. `anchor-lab bench -compare` ranks
+  every model scored so far. Switching to the winner is a person editing `/etc/anchor-lab/env`.
+  The fifty aren't in this repository: a public set of known answers is one a model can be tuned
+  to, and then its score says nothing. The repository has a sample of ten (`bench/set_sample.go`)
+  with each kind of trouble, and a private set is a file built in with `-tags privatebench`
+  (`build.sh`). The private set's version is what a score is compared under.
+- **The bench reaches no network.** Its servers run inside the harness and its sessions answer from
+  them in memory (`gateway.OpenWith`, which only the bench may call, and a test holds the module to
+  that). Its runs go to a journal of their own under `bench/`, so they never reach `results.ndjson`
+  or the site. The programs still run in real cells, so the cell is tested too.
+- **The bench is our own cases, not real servers.** Real servers change, rate-limit and go down,
+  and a model's score shouldn't move because a vendor's did. Real servers are what `explore`
+  measures. The bench measures the model.
+- **The lab is a repository of its own, and public.** It imports nothing from the site and the site
+  imports nothing from it, so the binary on the box has none of the site's code in it. The site's
+  collector is written against the formats (`anchor-lab-result/1`, `anchor-lab-stats/1`), not
+  against this code. It's public so that how a tool is tested can be read, and a vendor can run it
+  against their own server.
+- **The targets are the servers that already answer the site's probe without a key.** The site's
+  server makes the list from its live snapshot. That's the set where no account is needed, so the
+  first version carries no credentials at all.
+- **The cells replace the `agent-run` wrapper.** An earlier wrapper started a sandbox by hand for
+  each agent, which is what the cell units now do from a file. `install.sh` removes the wrapper when it finds it on the
+  box and says so. It leaves the folder of earlier agents' reports alone, and it prints any sudo
+  rule that names the wrapper for root to take out.
+- **The admin page sees the lab, over HTTP, numbers only.** `anchor-lab stats` (`anchor-lab-stats.service`) answers
+  `GET /v1/stats` on the box's own address on the local network, never every interface. It reads
+  the state and `/proc` and `/sys` and writes nothing, and runs as a user made for it each start,
+  in the anchorlab group so it can read the journal. Three walls, each on its own: the box's
+  firewall lets only the site's server reach the port, the unit lets the process talk to this
+  machine and private networks only, and the program answers the addresses in
+  `ANCHOR_LAB_STATS_ALLOW` and refuses the rest. What goes out follows the results' rule: the run
+  in progress, today's counts, the latest twenty results, and the machine (load, memory, disks, the
+  GPU's use, memory and temperature). No tool's name or description, no error message, nothing a
+  model wrote. The transcripts stay on the box. The site asks at most every ten seconds while its
+  admin page is open and checks every field against the format before showing it. SSH through
+  `labsync` would have needed no new port, but a login and an ssh process every few seconds for a
+  status line. Still a pull: the box holds nothing of ours and sends nothing unasked.
+
+## How it gets to the site
+
+Three steps. The first is built. The other two are designed here and built after a first
+real run, because the page should be shaped by what the results look like.
+
+1. **The box tests and writes** (built). `results.ndjson` grows by two lines a server.
+2. **The site's server collects** (next). A timer on the site's server asks the box for the lines
+   after the last one it has, and a collector that's part of the site's own code checks each line
+   with a parser of its own: the version, every field's type and range, the slug against the
+   listings, times that aren't in the future, tool names against the pattern. A line that fails is
+   dropped and counted. What passes is written to the state directory, one file a listing, and the same timer sends the box a fresh list of targets.
+3. **The site shows it** (after that). The files are read into the live state beside the probes, so
+   a listing's page and `/api/v1/live/<slug>.json` get a "Lab" panel: when it was last tested, with
+   which model, how many tools answered, on which attempt, and how fast. Later the same numbers
+   fill Performance and Task success, which changes the methodology and goes in the changelog with
+   a version.
+
+## Rejected
+
+- **Letting the program make its own calls, with a firewall around it.** The firewall would have to
+  allow the vendor's addresses, which change, and nothing would count or limit the calls. A cell
+  with no network is simpler to reason about and gives the measurements for free.
+- **`systemd-run` with the sandbox as arguments, or a sudo rule.** Either lets whatever starts the
+  cell choose its walls. A unit file installed by root can't be argued with.
+- **An import filter on the programs** (no `os/exec`, no `net`). A filter can be got round and
+  reads like a wall. The cell is the wall.
+- **Publishing what the model says about a tool.** It would be the most readable part and the least
+  safe: a tool's description can ask for a good review.
+- **The box posting results to the site's API.** It would need a credential on the box, and the
+  box is the machine that runs strangers' code.
+- **Sharing the result format as Go code between the lab and the site.** The collector should be
+  written against the format, not against the lab's source, so a compromised box can't rely on a
+  quirk both sides share.
+- **Keys for servers that need an account, in the first version.** Each key is something to steal
+  and something that can spend. They come later, one listing at a time, injected by the gateway and
+  never shown to the model or the program.
+
+## Numbers
+
+| What | Value | Where |
+| --- | --- | --- |
+| Calls a run may make | 40 | `gateway.DefaultLimits.MaxCalls` |
+| One answer's size | 4 MB | `MaxBody` |
+| One call's time | 60 s | `CallTimeout` |
+| Between two requests to a server | 300 ms | `MinInterval` |
+| A call's arguments | 64 KB | `MaxArgs` |
+| A tool's answer as the program sees it | 32 KB | `MaxText` |
+| Replies asked of the model in one explore | 6 | `MaxTurns` in `cmd/anchor-lab/main.go` |
+| Tries at one tool | 3 | `Attempts` |
+| A program's build, and its run | 3 min, 90 s (2 min at most) | `buildLimit`, `JobTimeout`, `maxRunLimit` |
+| A program, and what's kept of its output | 256 KB, 64 KB | `maxSource`, `maxOutput` in `cell.go` |
+| A cell's memory, processes, life | 6 GB, 512, 7 min | `anchor-lab-cell@.service` |
+| A server's test stands for | 7 days | `-retest` |
+| Between two servers | 20 s | `-pause` |
+| Targets from the listings alone, 14 November 2026 | 61 | `anchor-lab targets -data data` |
+| Bench cases: callable, traps, servers | 43, 7, 5 | `bench/cases.go`, version `anchor-lab-bench/1` |
+| Replies asked of the model on one bench server | 8 | `MaxTurns` in `benchCmd` |
+| The language version a program is built as | Go 1.22 | `go.mod` written by `cell.Serve` |
+| One stats reading is served for | 5 s | `-fresh` on `anchor-lab stats` |
+| The site asks the box at most every, and waits | 10 s, 3 s | `labFresh`, `labTimeout` in `labstats.go` |
+| The Lab tab asks the site every | 15 s, while it's open | `site.js` |
+| The stats answer, at most | 256 KB | `labMaxBody` |
+| Latest results in the stats | 20 | `stats.Recent`, `labRecent` |
+
+## Where it lives
+
+- `README.md`: building it, installing it on the box, the first run.
+- `cmd/anchor-lab`: `run` (the harness), `cell`, `sync` (what the site's server may ask),
+  `targets` (run on the site's server).
+- `gateway`: the calls, the address check, which tools are called, the limits.
+- `cell`: the protocol, the cell's half and the harness's, and `sdk.go.txt`, the package a
+  program imports.
+- `agent`: the two tasks, the prompt, the arithmetic of a result.
+- `journal`: the three kinds of file and the result's format (`anchor-lab-result/1`).
+- `bench`: the cases and their right answers (the sample here, a private set by build tag), the
+  in-process servers, the score.
+- `stats`: what the admin page sees, and the server that answers it.
+- `brain`, `targets`.
+- `systemd`, `install.sh`: the units and the one script root runs on the box.
+- `build.sh`: vet, test and build, with a private bench set or without.
+
+## What was run, and what wasn't
+
+- Run: the tests, and `systemd-analyze verify` on the units. One test is a
+  whole run: a fake MCP server, a scripted model, and real programs compiled and run by the cell's
+  code over the real protocol, with a tool that says it deletes and carries an instruction in its
+  description. The cells in the tests are plain processes, without the unit's walls.
+- Run end to end through the real command: `anchor-lab bench` against a stand-in model that got one tool wrong on purpose and tried one trap. It scored 42 of 43 with that
+  tool and that trap named. The first try failed every build, because the cell's `go.mod` asked
+  for Go 1.26 and that machine had 1.24, which is why it now asks for 1.22.
+- Run against real servers: `connect` only, once each, against Exa's and ReqRes's hosted MCP
+  servers. Both opened and listed their tools (2 and 12). Of ReqRes's 12, 8 are named like a change
+  (`create_project`, `patch_record` and so on) and were marked not to call.
+- Not run: the units on a real machine, and `explore` with a real model against a real server. The
+  first run on the box is the test of both. The likeliest thing to need a change is the cell
+  unit's system call filter, which fails closed: a cell that can't build says so in the journal.
+
+## Open
+
+- **HTTP APIs.** Over half the listings on the site are plain APIs, not MCP servers. They need a second kind of call in
+  the gateway (same address check, same limits) driven by the listing's OpenAPI file.
+- **Tasks with a right answer.** `explore` measures whether a tool can be called. Task success
+  needs tasks a category shares and an answer the harness can check without a model's opinion.
+- **Servers that run on the caller's machine** (stdio). Running a vendor's package is
+  a different risk from calling a vendor's server, and needs a cell of its own kind, with a
+  network. Not before the rest has run for a while.
+- **Open-weight models**, tested as models on the box itself.
+- **Keys**, as above.
+- **A second wall on the network.** The box's own firewall keeps it off the local network. A block
+  on the router or the switch that doesn't depend on the box is still to do.
+- **How long transcripts are kept** on the box, and whether a sample is read by a person or a
+  frontier model each week.

@@ -1,0 +1,197 @@
+// Package journal is what the lab writes down as it works: every event the moment it happens, the
+// big things (code, output, what the model said) in a folder a run, and one line a finished run in
+// the file the site's server collects.
+//
+//	<state>/events/2026-11-15.ndjson   every event of every run, in order; tail -f follows the lab
+//	<state>/runs/<run>/                code-1.go, output-1.txt, model-1.txt, tools.json
+//	<state>/results.ndjson             one Result a finished run; `anchor-lab export` reads it
+//
+// Only results.ndjson leaves the box, and a Result holds numbers, names from fixed lists and the
+// server's own tool names: no sentence a model or a tool wrote (DESIGN.md).
+package journal
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sync"
+	"time"
+)
+
+// ResultVersion names the format of a line in results.ndjson. A change to what a field means is a
+// new version, and the collector on the site's side refuses a version it doesn't know.
+const ResultVersion = "anchor-lab-result/1"
+
+// Result is one finished run of one task against one listing.
+type Result struct {
+	V       string    `json:"v"`
+	Run     string    `json:"run"`
+	Slug    string    `json:"slug"`
+	Task    string    `json:"task"` // connect | explore
+	Started time.Time `json:"started"`
+	Ended   time.Time `json:"ended"`
+	Harness string    `json:"harness"`
+	Model   string    `json:"model,omitempty"` // the model that wrote the code, "" for a task with none
+
+	// Status is how far the connection got: ok | auth (the server wants credentials) | unreachable
+	// (no answer, TLS or DNS) | refused (an address we don't call) | error (it answered, not as MCP).
+	Status      string `json:"status"`
+	Protocol    string `json:"protocol,omitempty"`
+	Tools       int    `json:"tools"`
+	SchemaBytes int    `json:"schemaBytes"`
+	InitMs      int    `json:"initMs"`
+	ListMs      int    `json:"listMs"`
+
+	// Outcome is worked out from the calls, never taken from the model: success (every tool we may
+	// call answered without an error at least once) | partial | failure | none (nothing to call).
+	Outcome      string `json:"outcome"`
+	Calls        int    `json:"calls"`
+	Errors       int    `json:"errors"`
+	P50Ms        int    `json:"p50Ms"`
+	P95Ms        int    `json:"p95Ms"`
+	ToolsTried   int    `json:"toolsTried"`
+	ToolsOK      int    `json:"toolsOk"`
+	ToolsRefused int    `json:"toolsRefused"` // tools the policy doesn't call (they may change something)
+	Turns        int    `json:"turns"`
+	Builds       int    `json:"builds"`
+	BuildFails   int    `json:"buildFails"`
+	WallMs       int64  `json:"wallMs"`
+
+	// What the run cost, for cost per job: the model's time and tokens as its server counted them,
+	// and the cells' time building and running the programs. The box's model is local, so the cost
+	// is time and power, not a bill; tokens make it comparable with a hosted model's price.
+	ModelMs      int64 `json:"modelMs"`
+	PromptTokens int   `json:"promptTokens"`
+	OutputTokens int   `json:"outputTokens"`
+	CellMs       int64 `json:"cellMs"`
+
+	PerTool []ToolResult `json:"perTool,omitempty"`
+}
+
+// ToolResult is what happened to one tool of the server in a run.
+type ToolResult struct {
+	Name     string `json:"name"`
+	Refused  bool   `json:"refused,omitempty"`
+	Calls    int    `json:"calls"`
+	OK       int    `json:"ok"`
+	Errors   int    `json:"errors"`
+	FirstOK  int    `json:"firstOk,omitempty"`  // which attempt first answered without an error, 0 for never
+	Refusals int    `json:"refusals,omitempty"` // tries at a tool the lab doesn't call, which the model was told not to call
+	MedianMs int    `json:"medianMs,omitempty"`
+}
+
+// ToolName is what a tool's name has to look like to be written into a Result. The name comes from
+// the server under test, so it's the one string in a Result a stranger chose.
+var ToolName = regexp.MustCompile(`^[A-Za-z0-9_.:/-]{1,96}$`)
+
+// Journal writes all three. Safe for use by several goroutines.
+type Journal struct {
+	dir string
+	now func() time.Time
+
+	mu  sync.Mutex
+	day string
+	f   *os.File
+	seq uint64
+}
+
+// Open makes the folders under dir and returns a journal that appends to them.
+func Open(dir string) (*Journal, error) {
+	for _, d := range []string{"events", "runs"} {
+		if err := os.MkdirAll(filepath.Join(dir, d), 0o750); err != nil {
+			return nil, err
+		}
+	}
+	return &Journal{dir: dir, now: time.Now}, nil
+}
+
+// Event appends one event to today's file and syncs it, so the file is what happened even if the
+// box loses power on the next line. fields is copied into the line beside t, seq, run and ev.
+func (j *Journal) Event(run, ev string, fields map[string]any) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	now := j.now().UTC()
+	if day := now.Format("2006-01-02"); day != j.day || j.f == nil {
+		if j.f != nil {
+			j.f.Close()
+		}
+		f, err := os.OpenFile(filepath.Join(j.dir, "events", day+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "journal:", err)
+			return
+		}
+		j.f, j.day = f, day
+	}
+	j.seq++
+	line := map[string]any{"t": now.Format(time.RFC3339Nano), "seq": j.seq, "run": run, "ev": ev}
+	for k, v := range fields {
+		if _, taken := line[k]; !taken {
+			line[k] = v
+		}
+	}
+	b, err := json.Marshal(line)
+	if err != nil {
+		b, _ = json.Marshal(map[string]any{"t": line["t"], "seq": j.seq, "run": run, "ev": ev, "journalError": err.Error()})
+	}
+	j.f.Write(append(b, '\n'))
+	j.f.Sync()
+}
+
+// Artifact keeps something too big for an event line in the run's folder. It stays on the box.
+func (j *Journal) Artifact(run, name string, b []byte) {
+	dir := filepath.Join(j.dir, "runs", run)
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return
+	}
+	os.WriteFile(filepath.Join(dir, filepath.Base(name)), b, 0o640)
+}
+
+// Result appends a finished run to results.ndjson.
+func (j *Journal) Result(r Result) error {
+	r.V = ResultVersion
+	b, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	f, err := os.OpenFile(filepath.Join(j.dir, "results.ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// Results reads results.ndjson, the lines after the first skip, calling fn for each. It returns how
+// many lines the file has. A line that isn't a Result is counted and skipped.
+func Results(dir string, skip int, fn func(n int, line []byte, r Result)) (int, error) {
+	f, err := os.Open(filepath.Join(dir, "results.ndjson"))
+	if os.IsNotExist(err) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	n := 0
+	for sc.Scan() {
+		n++
+		if n <= skip {
+			continue
+		}
+		var r Result
+		if json.Unmarshal(sc.Bytes(), &r) == nil && r.V == ResultVersion {
+			fn(n, sc.Bytes(), r)
+		}
+	}
+	return n, sc.Err()
+}

@@ -177,3 +177,20 @@ func TestListen(t *testing.T) {
 	}
 	ln.Close()
 }
+
+// A bench the harness is running for the inbox shows, and goes when it ends.
+func TestBenching(t *testing.T) {
+	c, _ := fixture(t)
+	f, _ := os.OpenFile(filepath.Join(c.State, "events", "2026-11-17.ndjson"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"t":"2026-11-17T13:54:00Z","run":"","ev":"bench.start","model":"gpt-oss-120b"}` + "\n")
+	f.Close()
+	if s := Collect(c); s.Benching != "gpt-oss-120b" {
+		t.Errorf("benching: %q", s.Benching)
+	}
+	f, _ = os.OpenFile(filepath.Join(c.State, "events", "2026-11-17.ndjson"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"t":"2026-11-17T13:58:00Z","run":"","ev":"bench.end","model":"gpt-oss-120b"}` + "\n")
+	f.Close()
+	if s := Collect(c); s.Benching != "" {
+		t.Errorf("after the end: %q", s.Benching)
+	}
+}

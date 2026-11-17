@@ -37,4 +37,8 @@ private bench set.
   apt repositories, no install scripts piped to a shell, no pip, npm or snap, no downloaded
   binaries. When something has to come from elsewhere, DESIGN.md says what and why. Today that's
   llama.cpp, built from its source, and the model files from Hugging Face.
+- No sudo, apart from installing (`install.sh`, `models/install.sh`). Running the lab works as an
+  ordinary user in the `anchorlab` group: what a person does to a running lab is a file in its
+  inbox that the harness acts on as itself. A new command that needs root to use is a design to
+  change, not a `sudo` to add to the docs.
 - Decisions go into DESIGN.md in the same pull request, with the reason.

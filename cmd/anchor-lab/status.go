@@ -159,6 +159,8 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 			stage = fmt.Sprintf("exploring, turn %d", c.Turn)
 		}
 		fmt.Fprintf(w, "now      %s, %s, %s, started %s\n", c.Slug, stage, plural(c.Calls, "call")+" ("+plural(c.Errors, "error")+")", ago(now, c.Started))
+	} else if s.Benching != "" {
+		fmt.Fprintf(w, "now      benching %s (anchor-lab bench -compare once it's done)\n", s.Benching)
 	} else {
 		fmt.Fprintf(w, "now      idle\n")
 	}

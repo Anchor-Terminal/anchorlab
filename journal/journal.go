@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -242,4 +243,66 @@ func Results(dir string, skip int, fn func(n int, line []byte, r Result)) (int, 
 		}
 	}
 	return n, sc.Err()
+}
+
+// InboxModel is the model the lab has been told to use, from <state>/inbox/model, which
+// `anchor-lab model use` writes: ok false when there's no such file (the -model flag and
+// ANCHOR_LAB_MODEL then decide), and "" for connect only. The inbox is the group's to write, so
+// switching the model needs no root and no restart: the harness reads it before each test.
+func InboxModel(state string) (model string, ok bool) {
+	b, err := os.ReadFile(filepath.Join(state, "inbox", "model"))
+	if err != nil {
+		return "", false
+	}
+	m := strings.TrimSpace(string(b))
+	if m == "none" {
+		m = ""
+	}
+	return m, true
+}
+
+// WriteInbox puts a file in <state>/inbox in one rename, readable by the harness whoever writes it.
+func WriteInbox(state, name string, b []byte) error {
+	inbox := filepath.Join(state, "inbox")
+	tmp, err := os.CreateTemp(inbox, "."+name+"-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), filepath.Join(inbox, filepath.Base(name)))
+}
+
+// BenchRequests are the models waiting to be benched, from <state>/inbox/bench-*.request, oldest
+// first. `anchor-lab bench -model <name>` writes one when it can't run the bench itself, and the
+// harness runs it as its own user between tests.
+func BenchRequests(state string) (models []string, files []string) {
+	paths, _ := filepath.Glob(filepath.Join(state, "inbox", "bench-*.request"))
+	type req struct {
+		path, model string
+		at          time.Time
+	}
+	var rs []req
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		fi, err2 := os.Stat(p)
+		if err != nil || err2 != nil {
+			continue
+		}
+		rs = append(rs, req{p, strings.TrimSpace(string(b)), fi.ModTime()})
+	}
+	sort.SliceStable(rs, func(i, j int) bool { return rs[i].at.Before(rs[j].at) })
+	for _, r := range rs {
+		models, files = append(models, r.model), append(files, r.path)
+	}
+	return models, files
 }

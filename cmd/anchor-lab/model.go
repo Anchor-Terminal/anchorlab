@@ -8,28 +8,26 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
-	"syscall"
 	"text/tabwriter"
 	"time"
 
 	"github.com/Anchor-Terminal/anchorlab/brain"
+	"github.com/Anchor-Terminal/anchorlab/journal"
 )
 
-// modelCmd is which model the lab uses, and switching it when we decide (MODELS.md).
+// modelCmd is which model the lab uses, and switching it when we decide (MODELS.md). No sudo: the
+// choice goes in <state>/inbox/model, which the anchorlab group may write, and the harness reads it
+// before its next test, with no restart.
 //
 //	anchor-lab model                  the model the lab uses, and every model the server offers
-//	sudo anchor-lab model use <name>  use another: checks the server has it, writes it in the
-//	                                  settings and restarts the harness
-//	sudo anchor-lab model use none    connect only, no model
+//	anchor-lab model use <name>       use another: checks the server has it and asks it to load it
+//	anchor-lab model use none         connect only, no model
 func modelCmd(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("model", flag.ExitOnError)
-	env := fs.String("env", "/etc/anchor-lab/env", "the lab's settings")
-	restart := fs.Bool("restart", true, "restart anchor-lab after a switch, so it takes the new model")
+	env := fs.String("env", "/etc/anchor-lab/env", "the lab's settings, for the model server's address and the model it starts with")
+	state := fs.String("state", "/var/lib/anchor-lab", "the lab's state, whose inbox holds the model in use")
 	load := fs.Bool("load", true, "ask the model server to load the new model now, so the first test doesn't wait for it")
 	force := fs.Bool("force", false, "switch to a name the model server doesn't list")
 	fs.Parse(args)
@@ -47,6 +45,9 @@ func modelCmd(args []string, out io.Writer) error {
 	case len(rest) == 0:
 		models, err := serverModels(server)
 		current := settings["ANCHOR_LAB_MODEL"]
+		if m, ok := journal.InboxModel(*state); ok {
+			current = m
+		}
 		if current == "" {
 			fmt.Fprintln(out, "the lab uses: no model (connect only)")
 		} else {
@@ -91,13 +92,17 @@ func modelCmd(args []string, out io.Writer) error {
 				return fmt.Errorf("the model server doesn't have %s; it has %s", name, strings.Join(ids, ", "))
 			}
 		}
-		if err := setEnv(*env, "ANCHOR_LAB_MODEL", name); err != nil {
-			return err
+		write := name
+		if write == "" {
+			write = "none"
+		}
+		if err := journal.WriteInbox(*state, "model", []byte(write+"\n")); err != nil {
+			return fmt.Errorf("%w (is this user in the anchorlab group? install.sh adds the user who ran it)", err)
 		}
 		if name == "" {
-			fmt.Fprintln(out, "the lab uses no model now: connect only")
+			fmt.Fprintln(out, "the lab uses no model from its next test: connect only")
 		} else {
-			fmt.Fprintf(out, "the lab uses %s now\n", name)
+			fmt.Fprintf(out, "the lab uses %s from its next test\n", name)
 		}
 		if name != "" && *load {
 			if err := loadModel(server, name); err != nil {
@@ -106,18 +111,20 @@ func modelCmd(args []string, out io.Writer) error {
 				fmt.Fprintln(out, "  the model server is loading it")
 			}
 		}
-		if *restart {
-			if b, err := exec.Command("systemctl", "restart", "anchor-lab").CombinedOutput(); err != nil {
-				return fmt.Errorf("restarting anchor-lab: %v: %s (the setting is saved; restart it by hand)", err, bytes.TrimSpace(b))
-			}
-			fmt.Fprintln(out, "  anchor-lab restarted")
-		}
 		return nil
 	}
 	return errors.New("usage: anchor-lab model | anchor-lab model use <name|none>")
 }
 
-var modelName = regexp.MustCompile(`^[A-Za-z0-9._:/+-]{1,96}$`)
+// modelName is what a model's name may look like: letters and digits first, then those and . _ : / + -,
+// and no "..". Checked wherever a name arrives from a person or a file.
+var modelName = modelNameCheck{regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,95}$`)}
+
+type modelNameCheck struct{ re *regexp.Regexp }
+
+func (c modelNameCheck) MatchString(s string) bool {
+	return c.re.MatchString(s) && !strings.Contains(s, "..")
+}
 
 type serverModel struct {
 	ID     string
@@ -184,47 +191,4 @@ func loadModel(server, name string) error {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(b))
 	}
 	return nil
-}
-
-// setEnv sets one KEY=value line in the settings file, keeping every other line, the file's mode
-// and its owner, and replacing it in one rename.
-func setEnv(path, key, value string) error {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return fmt.Errorf("%s: %w (as root: sudo anchor-lab model use ...)", path, err)
-	}
-	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
-	done := false
-	for i, l := range lines {
-		if strings.HasPrefix(strings.TrimSpace(l), key+"=") {
-			lines[i] = key + "=" + value
-			done = true
-		}
-	}
-	if !done {
-		lines = append(lines, key+"="+value)
-	}
-	fi, err := os.Stat(path)
-	if err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".env-*")
-	if err != nil {
-		return fmt.Errorf("%s: %w (as root: sudo anchor-lab model use ...)", path, err)
-	}
-	defer os.Remove(tmp.Name())
-	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmp.Name(), fi.Mode().Perm()); err != nil {
-		return err
-	}
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		os.Chown(tmp.Name(), int(st.Uid), int(st.Gid))
-	}
-	return os.Rename(tmp.Name(), path)
 }

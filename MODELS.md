@@ -95,7 +95,7 @@ Run it as a user that can write the models folder; nothing in it needs root.
 ## 4. The server
 
 ```
-MODELS=/srv/models bash models/install.sh
+sudo MODELS=/srv/models bash models/install.sh
 ```
 
 It makes the user `llama` (no shell, in the `render` and `video` groups for the GPU), puts
@@ -154,16 +154,22 @@ Notes:
 
 ```
 for m in qwen3.8-27b qwen3.6-27b qwen3.5-122b-a10b gemma-4-31b gemma-4-26b-a4b glm-4.7-flash qwen3.6-35b-a3b gpt-oss-120b; do
-    sudo -u anchorlab anchor-lab bench -model "$m"
+    anchor-lab bench -model "$m"
 done
-sudo -u anchorlab anchor-lab bench -compare
+```
+
+That asks the lab for eight benches; it runs them one after another between tests, each loading its
+model, about half an hour each. `anchor-lab status` shows which is running. When they're done:
+
+```
+anchor-lab bench -compare
 ```
 
 Then switch to the winner, or to any of them whenever we decide:
 
 ```
 anchor-lab model                        # which one the lab uses, and which the server has loaded
-sudo anchor-lab model use gpt-oss-120b  # checks, saves it in /etc/anchor-lab/env, loads it, restarts the lab
+anchor-lab model use gpt-oss-120b       # checks the server has it, loads it; the next test uses it
 ```
 
 Each model's runs are filed under its own folder, `research/<model>/...`, so switching never mixes

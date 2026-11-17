@@ -91,6 +91,11 @@ small, they use the standard library only, and they treat everything above as da
 - **The model files are pinned.** `models/models.txt` has each file's size and SHA-256 as the Hub
   gave it, and `models/fetch.sh` refuses a file that doesn't match. A publisher replacing a file is
   something to look at, not something to pick up quietly.
+- **The box builds from a clone of this repository.** It's public, so cloning it needs no key, and
+  the box already has Go for the cells. That puts updating the lab on the box (`git pull`,
+  `./build.sh`, `install.sh`) with nothing copied from the site's server but the private bench set,
+  one file in `private/`. Earlier the box only ever got a binary built elsewhere; that was about
+  keeping our private repository and its keys off the box, which this still does.
 - **Our own things live in `private/`, which git ignores.** Results and transcripts copied off the
   box, our settings and presets, notes. The scripts read `private/settings.env` when it's there, so
   nothing about our machines is written into the public code, and one checkout holds both.
@@ -107,7 +112,7 @@ small, they use the standard library only, and they treat everything above as da
   error message, no sentence from a model. That keeps a stranger's text off the site and out of any
   prompt on the site's side, which is the rule reviews already follow . The transcripts stay on the box for a person to read.
 - **The site's server pulls. The box never pushes.** The box can't reach the site's server, and it
-  holds no key, token or checkout of ours. The site's server has one SSH key on the box, for a user
+  holds no key, token or private checkout of ours. The site's server has one SSH key on the box, for a user
   that can run one command (`anchor-lab sync`), which answers two requests: the result lines after
   a line number, and a new list of targets on standard input. Neither runs anything.
 - **Every run records what it cost.** An explore result

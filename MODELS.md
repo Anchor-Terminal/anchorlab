@@ -85,7 +85,8 @@ models/fetch.sh gpt-oss-120b    # one model
 models/fetch.sh all             # all eight, about 277 GB
 ```
 
-Each file is checked against its SHA-256 from `models/models.txt` once it's down. A download that
+Run it from the clone of this repository on the box. Each file is checked against its SHA-256 from
+`models/models.txt` once it's down. A download that
 stops picks up where it stopped. A file that fails the check isn't used, and the script says which.
 Run it as a user that can write the models folder; nothing in it needs root.
 

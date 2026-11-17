@@ -6,6 +6,7 @@
 //	anchor-lab cell      one cell: build and run one program from standard input (systemd starts it)
 //	anchor-lab sync      what the site's server may ask over SSH: "export N" or "targets"
 //	anchor-lab stats     numbers about the lab over HTTP, for the site's admin page and nobody else
+//	anchor-lab status    the lab from a terminal: on the box, or -from the box's stats
 //	anchor-lab targets   on the site's server: write the list of servers to test from the listings
 //	anchor-lab version
 package main
@@ -43,7 +44,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | targets | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | targets | version")
 		os.Exit(2)
 	}
 	var err error
@@ -59,6 +60,8 @@ func main() {
 		err = syncCmd(args)
 	case "stats":
 		err = statsCmd(args)
+	case "status":
+		err = statusCmd(args, os.Stdout)
 	case "targets":
 		err = targetsCmd(args)
 	case "version":

@@ -193,3 +193,40 @@ func TestOpenWithOnlyInBench(t *testing.T) {
 		return nil
 	})
 }
+
+// What the lab calls on a server like Anchor Terminal's own /mcp, which marks every tool: the
+// read-only ones whatever their names, none of the ones it says change something, whatever theirs.
+func TestCallableByAnnotation(t *testing.T) {
+	yes, no := true, false
+	tool := func(name string, ro, destr *bool) Tool {
+		var tl Tool
+		tl.Name = name
+		if ro != nil || destr != nil {
+			tl.Annotations = &struct {
+				ReadOnly    *bool `json:"readOnlyHint,omitempty"`
+				Destructive *bool `json:"destructiveHint,omitempty"`
+			}{ro, destr}
+		}
+		return tl
+	}
+	for _, c := range []struct {
+		t    Tool
+		want bool
+	}{
+		{tool("search_tools", &yes, &no), true},
+		{tool("check_server", &yes, &no), true},
+		{tool("submit_review", &no, &no), false},
+		{tool("file_issue", &no, &no), false},
+		{tool("contact", &no, &no), false},
+		{tool("react_chat", &no, &no), false},
+		{tool("delete_chat", &no, &yes), false},
+		{tool("set_reminder", &yes, nil), true},
+		{tool("file_issue", nil, nil), true},
+		{tool("submit_form", nil, nil), false},
+		{tool("get_contact", nil, nil), true},
+	} {
+		if got, _ := Callable(c.t); got != c.want {
+			t.Errorf("%s: callable %v, want %v", c.t.Name, got, c.want)
+		}
+	}
+}

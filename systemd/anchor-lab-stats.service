@@ -1,0 +1,57 @@
+# The lab's numbers for the site's admin page: `anchor-lab stats` answers GET /v1/stats to the
+# site's server and nobody else. It reads the lab's state and writes nothing; it runs as a user made
+# for it each start, in the anchorlab group so it can read the journal.
+#
+# Three walls, each on its own: the box's firewall lets only the site's server reach the port, this
+# unit lets the process talk to this machine and the local network only, and the program answers
+# the addresses in ANCHOR_LAB_STATS_ALLOW and refuses the rest.
+#
+# Set in /etc/anchor-lab/env, or the service won't start:
+#   ANCHOR_LAB_STATS_LISTEN=<the box's address>:8790
+#   ANCHOR_LAB_STATS_ALLOW=<the site's server's address>
+# Installed by install.sh.
+[Unit]
+Description=Anchor lab stats, for the site's admin page
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+DynamicUser=yes
+SupplementaryGroups=anchorlab
+EnvironmentFile=-/etc/anchor-lab/env
+ExecStart=/usr/local/bin/anchor-lab stats -state /var/lib/anchor-lab
+Restart=on-failure
+RestartSec=15
+
+ReadOnlyPaths=/var/lib/anchor-lab
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallErrorNumber=EPERM
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+IPAddressDeny=any
+IPAddressAllow=localhost 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16
+UMask=0077
+MemoryMax=256M
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

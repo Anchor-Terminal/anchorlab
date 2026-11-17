@@ -32,3 +32,10 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# a private bench set, copied in by build.sh and never committed
+bench/zz_private.go
+bench/zz_private_test.go
+# the binary build.sh writes
+/anchor-lab
+/targets.json

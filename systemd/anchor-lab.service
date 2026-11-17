@@ -1,0 +1,53 @@
+# The harness: it asks the model on this machine what to try, sends each program to a cell, makes
+# the calls the programs ask for (to the server under test and nowhere else) and writes the
+# journal. It runs as its own user, which owns nothing but /var/lib/anchor-lab and can't log in.
+# Set the model in /etc/anchor-lab/env (ANCHOR_LAB_MODEL=gpt-oss-120b); without it only the
+# connect task runs. Installed by install.sh.
+[Unit]
+Description=Anchor lab harness
+After=network-online.target anchor-lab-cell.socket
+Wants=network-online.target
+Requires=anchor-lab-cell.socket
+
+[Service]
+User=anchorlab
+Group=anchorlab
+EnvironmentFile=-/etc/anchor-lab/env
+ExecStart=/usr/local/bin/anchor-lab run -state /var/lib/anchor-lab -model "${ANCHOR_LAB_MODEL}" -model-url "${ANCHOR_LAB_MODEL_URL}"
+Environment=ANCHOR_LAB_MODEL= ANCHOR_LAB_MODEL_URL=http://127.0.0.1:8080/v1
+Restart=on-failure
+RestartSec=30
+
+StateDirectory=anchor-lab
+StateDirectoryMode=0750
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+# a call outside the filter fails with an error; the default would kill the process, the Go toolchain included
+SystemCallErrorNumber=EPERM
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+UMask=0027
+MemoryMax=2G
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

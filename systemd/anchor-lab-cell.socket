@@ -1,0 +1,18 @@
+# The door to the cells. The harness connects here once for each program a model wrote, and systemd
+# starts a cell for that connection alone (anchor-lab-cell@.service). Only the harness's user can
+# connect. Installed by install.sh; DESIGN.md has the reasons.
+[Unit]
+Description=Anchor lab: a cell for each connection
+
+[Socket]
+ListenStream=/run/anchor-lab/cell.sock
+SocketUser=anchorlab
+SocketGroup=anchorlab
+SocketMode=0600
+DirectoryMode=0750
+Accept=yes
+# programs run one at a time today; this is the ceiling if that changes
+MaxConnections=4
+
+[Install]
+WantedBy=sockets.target

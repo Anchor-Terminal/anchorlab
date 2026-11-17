@@ -197,3 +197,18 @@ func TestExtract(t *testing.T) {
 		}
 	}
 }
+
+// Every call answered with "you need a key" is the server's finding: status auth, outcome none.
+func TestTallyKeyed(t *testing.T) {
+	tools := []gateway.Tool{{Name: "search"}, {Name: "lookup"}}
+	r := journal.Result{Status: "ok"}
+	tally(&r, tools, []gateway.Call{{Tool: "search", Status: "auth"}, {Tool: "lookup", Status: "auth"}, {Tool: "search", Status: "keyed"}})
+	if r.Status != "auth" || r.Outcome != "none" || r.Calls != 2 || r.Errors != 2 {
+		t.Errorf("keyed: %+v", r)
+	}
+	r = journal.Result{Status: "ok"}
+	tally(&r, tools, []gateway.Call{{Tool: "search", Status: "auth"}, {Tool: "lookup", Status: "ok"}})
+	if r.Status != "ok" || r.Outcome != "partial" {
+		t.Errorf("one worked: %+v", r)
+	}
+}

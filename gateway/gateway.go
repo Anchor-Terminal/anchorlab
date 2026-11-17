@@ -88,8 +88,11 @@ func Callable(t Tool) (bool, string) {
 
 // Call is one tools/call as the gateway saw it.
 type Call struct {
-	Tool   string
-	Status string // ok | tool_error | rpc_error | http_error | timeout | unreachable | refused | budget | too_big
+	Tool string
+	// ok | tool_error | rpc_error | http_error | auth (401 or 403: the server wants a key) | timeout |
+	// unreachable | too_big, for calls that were sent; refused | budget | keyed for calls that weren't
+	// (keyed: the server has said twice it wants a key, so the lab stops asking it this run)
+	Status string
 	HTTP   int
 	Ms     int
 	Req    int
@@ -359,13 +362,25 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 		return fail("refused", "the arguments have to be a JSON object")
 	}
 	s.mu.Lock()
-	made := 0
+	made, auths, oks := 0, 0, 0
 	for _, x := range s.calls {
-		if x.Status != "refused" && x.Status != "budget" {
+		if Sent(x.Status) {
 			made++
+		}
+		switch x.Status {
+		case "auth":
+			auths++
+		case "ok":
+			oks++
 		}
 	}
 	s.mu.Unlock()
+	// A server that lists its tools to anyone and then wants a key to run them answers every call
+	// the same way. Two refusals and nothing that worked is enough to say so and stop: the rest of
+	// the run's calls would only ask again.
+	if auths >= 2 && oks == 0 {
+		return fail("keyed", "this server wants a key to call its tools (HTTP 401 or 403), and the lab has none: stop calling it, and reply DONE")
+	}
 	if made >= s.Limits.MaxCalls {
 		return fail("budget", fmt.Sprintf("this run has used its %d calls", s.Limits.MaxCalls))
 	}
@@ -376,7 +391,7 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 		var es *ErrStatus
 		status := "unreachable"
 		if errors.As(err, &es) {
-			status = map[string]string{"auth": "http_error", "error": "rpc_error", "unreachable": "unreachable", "refused": "refused", "timeout": "timeout", "too_big": "too_big", "http": "http_error"}[es.Status]
+			status = map[string]string{"auth": "auth", "error": "rpc_error", "unreachable": "unreachable", "refused": "refused", "timeout": "timeout", "too_big": "too_big", "http": "http_error"}[es.Status]
 		}
 		return fail(status, clip(err.Error(), 600))
 	}
@@ -407,11 +422,19 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 	c.Status = "ok"
 	if out.IsError {
 		c.Status = "tool_error"
+		// the tool's own words, so the program (and the model reading what it printed) can see why
+		// and try again with better arguments: the SDK documents Error as why it failed
 		r.Error = "the tool answered with an error"
+		if why := clip(strings.TrimSpace(text.String()), 2000); why != "" {
+			r.Error += ": " + why
+		}
 	}
 	s.record(c)
 	return r
 }
+
+// Sent says whether a call with this status was sent to the server.
+func Sent(status string) bool { return status != "refused" && status != "budget" && status != "keyed" }
 
 func (s *Session) record(c Call) {
 	s.mu.Lock()
@@ -508,13 +531,24 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 		}
 		return nil, meta, &ErrStatus{"unreachable", clip(err.Error(), 300)}
 	}
+	// what the server said with an error status, cut short and made printable, so the model can read
+	// "missing API key" or "invalid parameter x" rather than a bare number
+	said := ""
+	if b := strings.TrimSpace(strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return ' '
+		}
+		return r
+	}, string(raw))); b != "" {
+		said = ": " + clip(b, 400)
+	}
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
-		return nil, meta, &ErrStatus{"auth", fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		return nil, meta, &ErrStatus{"auth", fmt.Sprintf("HTTP %d%s", resp.StatusCode, said)}
 	case resp.StatusCode >= 300 && resp.StatusCode < 400:
 		return nil, meta, &ErrStatus{"error", fmt.Sprintf("HTTP %d, a redirect, which the lab doesn't follow", resp.StatusCode)}
 	case resp.StatusCode >= 400:
-		return nil, meta, &ErrStatus{"http", fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		return nil, meta, &ErrStatus{"http", fmt.Sprintf("HTTP %d%s", resp.StatusCode, said)}
 	}
 	msg, ok := findResponse(raw, resp.Header.Get("Content-Type"), id)
 	if !ok {

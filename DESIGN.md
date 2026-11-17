@@ -67,6 +67,18 @@ small, they use the standard library only, and they treat everything above as da
   aren't marked destructive, and have names the list didn't catch, so they would have been
   called. This costs coverage, and it's the right way round for calling other people's production
   servers without asking.
+- **A server that wants a key to run its tools is the server's finding, not the model's failure.**
+  The list of servers to test is the ones that list their tools without a key, and many of those
+  then answer every call with 401. On the box's first evening, 199 of 204 HTTP errors were 401s,
+  and three servers spent their whole 40-call budget on them. So a 401 or 403 is its own call
+  status, `auth`; after two of them with nothing that worked, the gateway stops sending that server
+  calls for the run and tells the program why; and a run where every call came back that way has
+  status `auth` and outcome `none`, not `failure`.
+- **The program sees what the server said.** A tool's error text and the body of an HTTP error
+  come back in the reply's `Error`, which the SDK documents as why the call failed. Before, `Error`
+  held a fixed phrase and the text sat in `Text`, so a model printing `Error` never saw "missing
+  required field" and couldn't fix its arguments. The text is a stranger's and stays on the box,
+  like every tool description the model already reads.
 - **The numbers are the gateway's, never the model's.** Calls, errors, latency and which tool
   answered on which attempt are counted where the calls are made. The outcome is arithmetic over
   those (every callable tool answered without an error at least once: success; some: partial;

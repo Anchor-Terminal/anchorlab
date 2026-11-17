@@ -123,7 +123,7 @@ func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
 }
 
 // answered are the statuses of a call the server was really sent.
-func answered(status string) bool { return status != "refused" && status != "budget" }
+func answered(status string) bool { return gateway.Sent(status) }
 
 // tally works the result out from the gateway's record of the calls.
 func tally(r *journal.Result, tools []gateway.Tool, calls []gateway.Call) {
@@ -133,6 +133,7 @@ func tally(r *journal.Result, tools []gateway.Tool, calls []gateway.Call) {
 	}
 	by := map[string]*acc{}
 	var all []int
+	auths := 0
 	for _, c := range calls {
 		if c.Tool == "" {
 			continue
@@ -159,6 +160,9 @@ func tally(r *journal.Result, tools []gateway.Tool, calls []gateway.Call) {
 		} else {
 			a.errs++
 			r.Errors++
+			if c.Status == "auth" {
+				auths++
+			}
 		}
 		if c.Ms > 0 {
 			a.ms = append(a.ms, c.Ms)
@@ -198,6 +202,12 @@ func tally(r *journal.Result, tools []gateway.Tool, calls []gateway.Call) {
 		r.Outcome = "partial"
 	default:
 		r.Outcome = "failure"
+	}
+	// every call the server was sent came back "you need a key": the server lists its tools to
+	// anyone and runs them for no one without an account. That's a finding about the server, not a
+	// model failing, so it's status auth with nothing callable rather than a failure.
+	if r.Calls > 0 && auths == r.Calls {
+		r.Status, r.Outcome = "auth", "none"
 	}
 }
 

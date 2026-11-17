@@ -49,6 +49,7 @@ type Stats struct {
 	Started   time.Time `json:"harnessStarted,omitempty"` // the harness's last start today
 	Targets   int       `json:"targets"`
 	Current   *Current  `json:"current,omitempty"`
+	Benching  string    `json:"benching,omitempty"` // the model the harness is benching now, asked for through the inbox
 	Today     Today     `json:"today"`
 	Results   int       `json:"results"` // lines in results.ndjson
 	Recent    []Result  `json:"recent"`
@@ -180,8 +181,12 @@ func Collect(c Config) Stats {
 	}
 	t := now().UTC()
 	s := Stats{V: Version, At: t, Harness: c.Harness, Today: Today{Outcomes: map[string]int{}, Statuses: map[string]int{}}, Recent: []Result{}}
-	if modelOK.MatchString(c.Model) {
-		s.Model = c.Model
+	model := c.Model
+	if m, ok := journal.InboxModel(c.State); ok {
+		model = m
+	}
+	if modelOK.MatchString(model) {
+		s.Model = model
 	}
 	if f, _, err := targets.Load(filepath.Join(c.State, "inbox", "targets.json")); err == nil {
 		s.Targets = len(f.Targets)
@@ -265,6 +270,7 @@ type event struct {
 	PromptTokens int64     `json:"promptTokens"`
 	OutputTokens int64     `json:"outputTokens"`
 	Built        *bool     `json:"built"`
+	Model        string    `json:"model"`
 }
 
 // events reads today's events file: the counts, the harness's start and the run in progress.
@@ -287,6 +293,13 @@ func events(state string, t time.Time, s *Stats, finished finishedRuns) {
 		case "harness.start":
 			s.Started = e.T.UTC()
 			cur = nil
+			s.Benching = ""
+		case "bench.start":
+			if modelOK.MatchString(e.Model) {
+				s.Benching = e.Model
+			}
+		case "bench.end", "bench.failed":
+			s.Benching = ""
 		case "run.start":
 			s.Today.Runs++
 			cur = nil

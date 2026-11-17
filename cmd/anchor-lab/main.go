@@ -108,27 +108,49 @@ func run(args []string) error {
 		return err
 	}
 	o := agent.Options{
-		Journal: j, Model: *model, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 6, JobTimeout: 90 * time.Second, Attempts: 3,
+		Journal: j, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 6, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: fmt.Sprintf("anchor-lab/%s (+https://www.anchorterminal.com/benchmark/; %s)", version, *contact),
+		Dial:      dialer(*sock, *unsafeCells),
 	}
-	if *model != "" {
-		b, err := newBrain(*modelURL, *model, *maxTokens, *modelWait, *temperature)
-		if err != nil {
-			return err
+	// use sets the model the next tests ask, from the inbox when `anchor-lab model use` has written
+	// one, otherwise from -model. A name that won't do is written down and the model before stays.
+	use := func(m string) {
+		if m == o.Model && (m == "") == (o.Brain == nil) {
+			return
 		}
-		o.Brain = b
+		if m == "" {
+			o.Model, o.Brain = "", nil
+			j.Event("", "model.use", map[string]any{"model": ""})
+			return
+		}
+		b, err := newBrain(*modelURL, m, *maxTokens, *modelWait, *temperature)
+		if err != nil || !modelName.MatchString(m) {
+			j.Event("", "model.refused", map[string]any{"model": m})
+			return
+		}
+		o.Model, o.Brain = m, b
+		j.Event("", "model.use", map[string]any{"model": m})
 	}
-	o.Dial = dialer(*sock, *unsafeCells)
+	current := func() string {
+		if m, ok := journal.InboxModel(*state); ok {
+			return m
+		}
+		return *model
+	}
+	use(current())
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	last := map[string]time.Time{} // when each slug's last test ended
+	// when each server's last test with each model ended: switching the model tests every server
+	// again, filed under the new model
+	last := map[string]time.Time{}
+	key := func(slug, model string) string { return slug + "\x00" + model }
 	journal.Results(*state, 0, func(_ int, _ []byte, r journal.Result) {
-		if r.Ended.After(last[r.Slug]) {
-			last[r.Slug] = r.Ended
+		if k := key(r.Slug, r.Model); r.Ended.After(last[k]) {
+			last[k] = r.Ended
 		}
 	})
-	j.Event("", "harness.start", map[string]any{"harness": version, "model": *model, "targets": *list})
+	j.Event("", "harness.start", map[string]any{"harness": version, "model": o.Model, "targets": *list})
 	for ctx.Err() == nil {
 		f, dropped, err := targets.Load(*list)
 		if err != nil {
@@ -147,12 +169,17 @@ func run(args []string) error {
 			if *only != "" && t.Slug != *only {
 				continue
 			}
-			if *only == "" && time.Since(last[t.Slug]) < *retest {
+			// benches asked for since the last test, then the model as it stands now
+			if !*once && *only == "" {
+				benchQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
+			}
+			use(current())
+			if *only == "" && time.Since(last[key(t.Slug, o.Model)]) < *retest {
 				continue
 			}
 			for _, r := range agent.Run(ctx, o, t) {
 				fmt.Printf("%s %-8s %s: %s, %s, %d tools, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, r.Status, r.Outcome, r.Tools, r.Calls, r.Errors)
-				last[t.Slug] = r.Ended
+				last[key(t.Slug, o.Model)] = r.Ended
 			}
 			tested++
 			sleep(ctx, *pause)
@@ -161,6 +188,7 @@ func run(args []string) error {
 			return nil
 		}
 		if tested == 0 {
+			benchQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
 			sleep(ctx, time.Minute)
 		}
 	}
@@ -209,6 +237,7 @@ func benchCmd(args []string) error {
 	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	compare := fs.Bool("compare", false, "print every score so far, best first, and exit")
+	here := fs.Bool("here", false, "run the bench in this process even if this user can't write the lab's state; otherwise it's asked of the lab")
 	fs.Parse(args)
 	if *compare {
 		scores, err := bench.Load(*state)
@@ -228,29 +257,28 @@ func benchCmd(args []string) error {
 	if *model == "" {
 		return errors.New("-model: which model to score")
 	}
-	b, err := newBrain(*modelURL, *model, *maxTokens, *modelWait, *temperature)
-	if err != nil {
-		return err
+	if !modelName.MatchString(*model) {
+		return fmt.Errorf("%q isn't a model's name", *model)
 	}
-	j, err := journal.Open(filepath.Join(*state, "bench"))
-	if err != nil {
-		return err
+	// The bench's files belong to the lab's own user. Anyone else asks the lab to run it: a request
+	// in the inbox, which the group may write, run by the harness between tests. No sudo either way.
+	if !*here && !canWrite(*state) {
+		if err := queueBench(*state, *model); err != nil {
+			return err
+		}
+		fmt.Printf("asked the lab to bench %s: it runs it after the test in progress, as its own user\n", *model)
+		fmt.Println("  watch it:  anchor-lab status   (or tail -f the events in", filepath.Join(*state, "bench", "events")+")")
+		fmt.Println("  the score: anchor-lab bench -compare, once it's done")
+		return nil
 	}
-	lim := gateway.DefaultLimits
-	lim.MinInterval = 0 // the servers are in this process
-	o := agent.Options{Journal: j, Brain: b, Model: *model, Limits: lim, Version: version, MaxTurns: 8, JobTimeout: 90 * time.Second, Attempts: 3,
-		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(*sock, *unsafeCells)}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	s := bench.Run(ctx, o)
-	if ctx.Err() != nil {
-		return errors.New("stopped before the end; no score kept")
-	}
-	if err := bench.Save(*state, s); err != nil {
+	s, err := runBench(ctx, *state, *sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("%s on %s: %d of %d answered (%d on the first try, %.2f calls each), %d of 7 traps tried, %d tokens, %.1f min in the model\n",
-		s.Model, bench.Version, s.Answered, s.Callable, s.FirstTry, s.Attempts, s.TrapsTried, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
+	fmt.Printf("%s on %s: %d of %d answered (%d on the first try, %.2f calls each), %d of %d traps tried, %d tokens, %.1f min in the model\n",
+		s.Model, bench.Version, s.Answered, s.Callable, s.FirstTry, s.Attempts, s.TrapsTried, s.Cases-s.Callable, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
 	if len(s.Missed) > 0 {
 		fmt.Printf("  never answered: %s\n", strings.Join(s.Missed, ", "))
 	}
@@ -258,6 +286,79 @@ func benchCmd(args []string) error {
 		fmt.Printf("  traps tried: %s\n", strings.Join(s.Tried, ", "))
 	}
 	return nil
+}
+
+// runBench puts one model through the bench and keeps its score, unless it was stopped or no
+// program reached a cell: a score made with the cells broken measures the box, not the model.
+func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string) (bench.Score, error) {
+	b, err := newBrain(modelURL, model, maxTokens, wait, temperature)
+	if err != nil {
+		return bench.Score{}, err
+	}
+	j, err := journal.Open(filepath.Join(state, "bench"))
+	if err != nil {
+		return bench.Score{}, err
+	}
+	lim := gateway.DefaultLimits
+	lim.MinInterval = 0 // the servers are in this process
+	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 8, JobTimeout: 90 * time.Second, Attempts: 3,
+		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells)}
+	s := bench.Run(ctx, o)
+	if ctx.Err() != nil {
+		return s, errors.New("stopped before the end; no score kept")
+	}
+	if s.Turns > 0 && s.Builds == 0 {
+		return s, errors.New("the model wrote programs but none reached a cell; no score kept (journalctl -u anchor-lab-cell.socket, and the bench's events say why)")
+	}
+	return s, bench.Save(state, s)
+}
+
+// benchQueued runs the benches asked for in the inbox, oldest first, and removes each request
+// once it's done or refused. The harness calls it between tests.
+func benchQueued(ctx context.Context, j *journal.Journal, state, sock string, unsafeCells bool, modelURL string, maxTokens int, wait time.Duration, temperature string) {
+	models, files := journal.BenchRequests(state)
+	for i, m := range models {
+		if ctx.Err() != nil {
+			return
+		}
+		os.Remove(files[i])
+		if !modelName.MatchString(m) {
+			j.Event("", "bench.refused", map[string]any{"model": m})
+			continue
+		}
+		j.Event("", "bench.start", map[string]any{"model": m})
+		s, err := runBench(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature)
+		if err != nil {
+			j.Event("", "bench.failed", map[string]any{"model": m})
+			continue
+		}
+		j.Event("", "bench.end", map[string]any{"model": m, "answered": s.Answered, "callable": s.Callable, "trapsTried": s.TrapsTried})
+	}
+}
+
+// queueBench asks the lab to bench a model: a request in its inbox, which benchQueued runs.
+func queueBench(state, model string) error {
+	name := "bench-" + strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			return r
+		}
+		return '-'
+	}, model) + ".request"
+	if err := journal.WriteInbox(state, name, []byte(model+"\n")); err != nil {
+		return fmt.Errorf("asking the lab to bench %s: %w (is this user in the anchorlab group? install.sh adds the user who ran it)", model, err)
+	}
+	return nil
+}
+
+// canWrite says whether this user can make files in dir.
+func canWrite(dir string) bool {
+	f, err := os.CreateTemp(dir, ".write-check-*")
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(f.Name())
+	return true
 }
 
 func sleep(ctx context.Context, d time.Duration) {
@@ -382,6 +483,7 @@ func export(state string, after int, w io.Writer) error {
 func targetsCmd(args []string) error {
 	fs := flag.NewFlagSet("targets", flag.ExitOnError)
 	from := fs.String("from", targets.API, "Anchor Terminal's tools.json: its address, or a file saved from it")
+	inbox := fs.String("inbox", "", "write the list to <state>/inbox/targets.json, such as /var/lib/anchor-lab, instead of printing it")
 	fs.Parse(args)
 	var r io.Reader
 	if strings.HasPrefix(*from, "https://") || strings.HasPrefix(*from, "http://") {
@@ -412,9 +514,20 @@ func targetsCmd(args []string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Fprintf(os.Stderr, "%d targets\n", len(f.Targets))
+	if *inbox != "" {
+		b, err := json.MarshalIndent(f, "", " ")
+		if err != nil {
+			return err
+		}
+		if err := journal.WriteInbox(*inbox, "targets.json", append(b, '\n')); err != nil {
+			return fmt.Errorf("%w (is this user in the anchorlab group?)", err)
+		}
+		fmt.Fprintf(os.Stderr, "in %s; the harness takes it at its next pass\n", filepath.Join(*inbox, "inbox", "targets.json"))
+		return nil
+	}
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", " ")
-	fmt.Fprintf(os.Stderr, "%d targets\n", len(f.Targets))
 	return enc.Encode(f)
 }
 

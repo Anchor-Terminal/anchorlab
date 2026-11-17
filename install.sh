@@ -17,6 +17,13 @@ command -v go >/dev/null || { echo "no go on PATH: the cells compile the program
 id anchorlab >/dev/null 2>&1 || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin anchorlab
 id labsync >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib/labsync --shell /bin/sh --groups anchorlab labsync
 usermod -a -G anchorlab labsync
+# whoever ran this with sudo runs the lab from now on without it: reading the state, switching the
+# model and asking for a bench all go through what the anchorlab group may read and write
+operator=""
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && id "$SUDO_USER" >/dev/null 2>&1; then
+    id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx anchorlab || operator="$SUDO_USER"
+    usermod -a -G anchorlab "$SUDO_USER"
+fi
 
 install -o root -g root -m 0755 "$here/anchor-lab" /usr/local/bin/anchor-lab.new
 mv -f /usr/local/bin/anchor-lab.new /usr/local/bin/anchor-lab
@@ -77,14 +84,15 @@ echo "installed $(/usr/local/bin/anchor-lab version)"
 [ -z "$retired" ] || echo "  removed agent-run ($(echo $retired)): the cells do its job. /var/lib/agents is left as it was"
 [ -z "$rules" ] || echo "  a sudo rule still names agent-run, for you to take out: $(echo $rules)"
 echo "  follow it:   tail -f /var/lib/anchor-lab/events/\$(date -u +%F).ndjson    (or journalctl -u anchor-lab -f)"
-echo "  one server:  systemctl stop anchor-lab; sudo -u anchorlab anchor-lab run -once -only <slug> -model <name>"
+echo "  how it goes: anchor-lab status   (no sudo once you're in the anchorlab group)"
+[ -z "$operator" ] || echo "  added $operator to the anchorlab group: log in again, and the lab needs no sudo from then on"
 echo
 echo "Still to do by hand, once (README.md has each line):"
-echo "  1. the model's name in /etc/anchor-lab/env, then: systemctl restart anchor-lab"
+echo "  1. a model: anchor-lab model use <name> (MODELS.md has the names)"
 echo "  2. the site server's public key in /var/lib/labsync/.ssh/authorized_keys, on one line, starting"
 echo "     restrict,command=\"/usr/local/bin/anchor-lab sync\" "
 echo "  3. labsync added to AllowUsers in sshd's config, key only"
-echo "  4. a list of targets: until the site's server sends one, the harness has nothing to test"
+echo "  4. a list of targets: anchor-lab targets -inbox /var/lib/anchor-lab (from Anchor Terminal's public API)"
 if [ -n "$listen" ] && [ -n "$allow" ]; then
     echo "  5. stats on $listen for $allow: the firewall's input chain needs, before its drop,"
     echo "     ip saddr ${allow%%,*} tcp dport ${listen##*:} accept"

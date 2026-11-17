@@ -118,28 +118,27 @@ MCP server, which needs no key and has seven tools, all marked read-only.
 
 ## Putting it on the box
 
-From the clone, after `./build.sh`, as root: `bash install.sh`. It makes the `anchorlab` and `labsync` users, installs the
-binary and the units, and installs nothing else. It can be run again: it replaces the binary and the
-units and leaves the state alone. It prints what's left to do by hand:
+From the clone, after `./build.sh`: `sudo bash install.sh`. It makes the `anchorlab` and `labsync`
+users, installs the binary and the units, and installs nothing else. It adds you, the user who ran
+it, to the `anchorlab` group: log in again, and everything after this needs no sudo. It can be run
+again: it replaces the binary and the units and leaves the state alone. It prints what's left:
 
-1. The model's name in `/etc/anchor-lab/env` (`ANCHOR_LAB_MODEL=`), as the model's server knows it
-   (the names in `MODELS.md`). The harness speaks to `http://127.0.0.1:8080/v1` unless
-   `ANCHOR_LAB_MODEL_URL` says another address on the same machine. It sends no temperature, so the
-   server's setting for each model applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. With no
-   model, only `connect` runs, which is a fine first day.
-2. The first list: `install -o anchorlab -g anchorlab -m 0640 targets.json /var/lib/anchor-lab/inbox/targets.json`,
-   or make it on the box: `anchor-lab targets | sudo -u anchorlab tee /var/lib/anchor-lab/inbox/targets.json >/dev/null`.
+1. A model: `anchor-lab model use <name>` (the names in `MODELS.md`). The harness speaks to
+   `http://127.0.0.1:8080/v1` unless `ANCHOR_LAB_MODEL_URL` in `/etc/anchor-lab/env` says another
+   address on the same machine. It sends no temperature, so the server's setting for each model
+   applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. With no model, only `connect` runs,
+   which is a fine first day.
+2. The first list: `anchor-lab targets -inbox /var/lib/anchor-lab`.
 3. For a server to collect results: its public key in `/var/lib/labsync/.ssh/authorized_keys`, on
    one line that starts `restrict,command="/usr/local/bin/anchor-lab sync" `, and `labsync` added
    to sshd's `AllowUsers`, key only.
 
 ## The first run
 
-Stop the service and test one server by hand, watching the journal in a second terminal:
+The harness starts testing as soon as it has a list. Watch it:
 
 ```
-systemctl stop anchor-lab
-sudo -u anchorlab anchor-lab run -once -only anchor-terminal -model <name>
+anchor-lab status -watch
 tail -f /var/lib/anchor-lab/events/$(date -u +%F).ndjson
 ```
 
@@ -147,13 +146,22 @@ If a cell can't build or run, the event says why, and `journalctl -u 'anchor-lab
 cell's own words. The unit's system call filter is the first suspect: a refused call shows as
 "operation not permitted" in the build output.
 
+## No sudo
+
+Installing is root's work: `sudo bash install.sh` and `sudo bash models/install.sh`, once and again
+after an update. Running the lab isn't. Everything else here works as an ordinary user in the
+`anchorlab` group, which the installer puts you in: reading the state (`status`, the events, the
+research), switching the model, making the list and asking for a bench. Those go through the
+lab's inbox (`/var/lib/anchor-lab/inbox`), the one folder the group may write, and the harness acts
+on them as its own user. Nothing in this README asks for sudo after the install.
+
 ## Talking to the lab
 
 `anchor-lab status` is the lab from a terminal: what it's testing now, today's counts, the machine,
 and the latest results.
 
 ```
-sudo anchor-lab status                            # on the box: reads the state itself
+anchor-lab status                                 # on the box: reads the state itself
 anchor-lab status -from http://<the box>:8790     # from the machine the box lets ask (the stats below)
 anchor-lab status -watch                          # again every 10 seconds, until Ctrl-C
 anchor-lab status -json                           # the stats as they are, for a script
@@ -197,12 +205,15 @@ The bench puts a model through known-answer cases on made-up servers that run in
 It reaches no network, and its runs stay out of the results that leave the box.
 
 ```
-sudo -u anchorlab anchor-lab bench -model gpt-oss-120b
-sudo -u anchorlab anchor-lab bench -model gemma-4-31b
-sudo -u anchorlab anchor-lab bench -compare
+anchor-lab bench -model gpt-oss-120b
+anchor-lab bench -model gemma-4-31b
+anchor-lab bench -compare
 ```
 
-`MODELS.md`, "Picking one", runs all eight in one go.
+`anchor-lab bench` run by you, not the lab's own user, asks the lab to run it: a request in its
+inbox, run by the harness as itself after the test in progress, so its files are the lab's. It
+says so and returns; `anchor-lab status` shows it running and `bench -compare` has the score when
+it's done. `MODELS.md`, "Picking one", asks for all eight in one go.
 
 This repository has a sample set (`bench/set_sample.go`): ten tools on two servers, each kind of
 trouble at least once. The fifty Anchor Terminal picks its model with are kept private, because a
@@ -232,13 +243,14 @@ the same layout, never public: the transcripts hold servers' tool descriptions a
 
 ```
 anchor-lab model                       # the model the lab uses, and every model the server offers
-sudo anchor-lab model use gemma-4-31b  # switch: checks the server has it, saves it, restarts the lab
-sudo anchor-lab model use none         # connect only
+anchor-lab model use gemma-4-31b       # switch: checks the server has it and asks it to load it
+anchor-lab model use none              # connect only
 ```
 
-`use` checks the name against what the model server offers, writes it as `ANCHOR_LAB_MODEL` in
-`/etc/anchor-lab/env`, asks the server to load it and restarts `anchor-lab`. From then on new runs
-are filed under the new model's folder.
+`use` checks the name against what the model server offers, writes it in the lab's inbox
+(`/var/lib/anchor-lab/inbox/model`) and asks the server to load it. The harness reads the inbox
+before each test, so the next test uses the new model, with no restart. From then on new runs are
+filed under the new model's folder, and every server is tested again with it.
 
 ## The private folder
 

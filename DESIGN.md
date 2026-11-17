@@ -49,7 +49,7 @@ small, they use the standard library only, and they treat everything above as da
   run, no network (not even loopback, where the model listens), the system read-only with /home,
   /var and the lab's own files hidden, a private /tmp in memory, and limits on memory, processes,
   CPU and time. The harness can't pass a cell an option, so a harness that's been talked into
-  something can't weaken one. Nothing needs sudo while the lab runs.
+  something can't weaken one. Nothing needs sudo while the lab runs, the harness included.
 - **Every job starts with an empty build cache.** A shared cache would let one run leave a compiled
   package for the next run to link in. Five seconds a build buys that off.
 - **The gateway calls one address a run, and only a public one.** The address comes from the list
@@ -169,8 +169,20 @@ small, they use the standard library only, and they treat everything above as da
   part of the path is cut down to letters, digits, dots, dashes and underscores, so no name from a
   list or a setting reaches outside the folder.
 - **Switching models is one command.** `anchor-lab model use <name>` checks the model server has
-  it, writes it in the settings, asks the server to load it and restarts the harness. Which model
-  the lab uses is a decision we make, after the bench; the command only makes acting on it safe.
+  it and asks it to load it. Which model the lab uses is a decision we make, after the bench; the
+  command only makes acting on it safe.
+- **No sudo to run the lab.** Root installs it and nothing else. The lab's state belongs to its
+  own user, `anchorlab`; the installer puts the person who ran it in the `anchorlab` group, which
+  can read the state and write one folder, the inbox. Everything a person does to a running lab is
+  a file in the inbox that the harness acts on as itself: the list (`targets.json`), the model
+  (`model`, read before each test, so switching needs no restart and no edit to root's settings),
+  and benches (`bench-<model>.request`, run between tests, so their files are the lab's). Sudo
+  for day-to-day work would mean a root shell open on the machine that runs strangers' code, and
+  files owned by whoever typed the command.
+- **A server is retested per model.** The seven days a test stands are counted per server and
+  model, so switching models tests every server again under the new one.
+- **A bench with no program in a cell keeps no score.** If the model wrote programs and none
+  reached a cell, the cells are broken, and the score would measure the box, not the model.
 - **The cells replace the `agent-run` wrapper.** An earlier wrapper started a sandbox by hand for
   each agent, which is what the cell units now do from a file. `install.sh` removes the wrapper when it finds it on the
   box and says so. It leaves the folder of earlier agents' reports alone, and it prints any sudo

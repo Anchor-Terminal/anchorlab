@@ -9,7 +9,10 @@ ListenStream=/run/anchor-lab/cell.sock
 SocketUser=anchorlab
 SocketGroup=anchorlab
 SocketMode=0600
-DirectoryMode=0750
+# systemd makes /run/anchor-lab as root with this mode; SocketUser applies to the socket alone. The
+# folder has to let anchorlab through to reach the socket, and the socket's own 0600 is what keeps
+# everyone else out. 0750 here left the harness with "permission denied" on the box's first run.
+DirectoryMode=0755
 Accept=yes
 # programs run one at a time today; this is the ceiling if that changes
 MaxConnections=4

@@ -89,3 +89,18 @@ func TestStatusFrom(t *testing.T) {
 		t.Errorf("not allowed: %v", err)
 	}
 }
+
+// A state folder this user can't read is an error that says so, not a page of zeros.
+func TestStatusCantRead(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads everything")
+	}
+	dir := labState(t)
+	os.Chmod(dir, 0o100)
+	defer os.Chmod(dir, 0o755)
+	var out bytes.Buffer
+	err := statusCmd([]string{"-state", dir, "-env", "/nonexistent"}, &out)
+	if err == nil || !strings.Contains(err.Error(), "sudo") {
+		t.Errorf("unreadable state: %v\n%s", err, out.String())
+	}
+}

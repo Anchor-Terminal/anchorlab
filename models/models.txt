@@ -1,0 +1,15 @@
+# The models MODELS.md runs, one file a line: the name the harness asks for, the folder it goes in
+# under the models folder, the Hugging Face repository, the file, its size in bytes and its SHA-256
+# as the Hub gave them on 17 November 2026. fetch.sh downloads and checks against these; a file the
+# publisher has replaced since fails the check, and its line is updated by hand after a look.
+#
+# name               folder                       repository                                 file                                            bytes        sha256
+qwen3.8-27b        qwen/qwen3.8-27b             ggml-org/Qwen3.8-27B-GGUF                  Qwen3.8-27B-Q4_K_M.gguf                         19403684480  d15d4b6de55f662ac40e867702d31afe738d032fa06b829b2b1a21a49d4a48ee
+qwen3.6-27b        qwen/qwen3.6-27b             ggml-org/Qwen3.6-27B-GGUF                  Qwen3.6-27B-Q4_K_M.gguf                         19403683392  f3ab00cc923590947877bad882e09ada67789f747f5d3cb3c178fdf91b9aaab9
+qwen3.5-122b-a10b  qwen/qwen3.5-122b-a10b       lmstudio-community/Qwen3.5-122B-A10B-GGUF  Qwen3.5-122B-A10B-Q4_K_M-00001-of-00002.gguf    40007829376  690a72066b02b108ac46e196f5359beb20214da31b1d647549e73163b2106658
+qwen3.5-122b-a10b  qwen/qwen3.5-122b-a10b       lmstudio-community/Qwen3.5-122B-A10B-GGUF  Qwen3.5-122B-A10B-Q4_K_M-00002-of-00002.gguf    34200410816  bfdce39661341bc531f42989038b0d84b843fc43847f91907428ba4197b95f87
+gemma-4-31b        google/gemma-4-31b           google/gemma-4-31B-it-qat-q4_0-gguf        gemma-4-31B_q4_0-it.gguf                        17651001568  179cfb99212709597eae5929112cfca677e1bbf566178b479ae1da0c4772874b
+gemma-4-26b-a4b    google/gemma-4-26b-a4b       google/gemma-4-26B-A4B-it-qat-q4_0-gguf    gemma-4-26B_q4_0-it.gguf                        14439363584  3eca3b8f6d7baf218a7dd6bba5fb59a56ee25fe2d567b6f5f589b4f697eca51d
+glm-4.7-flash      zai/glm-4.7-flash            ggml-org/GLM-4.7-Flash-GGUF                GLM-4.7-Flash-Q8_0.gguf                         31842799232  35ad96a0d4efd05a99045adb13a18c21a5be858726d9c2c5773406cd25909fd3
+qwen3.6-35b-a3b    qwen/qwen3.6-35b-a3b         ggml-org/Qwen3.6-35B-A3B-GGUF              Qwen3.6-35B-A3B-Q8_0.gguf                       36903139616  f189cedbe18dc524dd74014b23431081262bc9fcc57c18fec7a7a25149246570
+gpt-oss-120b       openai/gpt-oss-120b          ggml-org/gpt-oss-120b-GGUF                 gpt-oss-120b-MXFP4.gguf                         63387346208  582bd40f6886200101f4c4ed9f25f3fe80cc14c86e9e2b37746cd8904a0c622d

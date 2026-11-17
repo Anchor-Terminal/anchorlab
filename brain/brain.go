@@ -35,6 +35,9 @@ type Client struct {
 	Model     string
 	MaxTokens int
 	Timeout   time.Duration
+	// Temperature is sent when set. Unset, the model's server uses its own setting for the model,
+	// which in MODELS.md's presets is the one the model's publisher recommends.
+	Temperature *float64
 }
 
 // Local reports whether raw is an address on this machine.
@@ -61,7 +64,11 @@ func (c *Client) Chat(ctx context.Context, msgs []Message) (string, Usage, error
 	if err := Local(c.URL); err != nil {
 		return "", Usage{}, fmt.Errorf("the model's address: %w", err)
 	}
-	body, _ := json.Marshal(map[string]any{"model": c.Model, "messages": msgs, "temperature": 0.2, "max_tokens": c.MaxTokens, "stream": false})
+	ask := map[string]any{"model": c.Model, "messages": msgs, "max_tokens": c.MaxTokens, "stream": false}
+	if c.Temperature != nil {
+		ask["temperature"] = *c.Temperature
+	}
+	body, _ := json.Marshal(ask)
 	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.URL, "/")+"/chat/completions", bytes.NewReader(body))

@@ -89,6 +89,7 @@ func run(args []string) error {
 	modelURL := fs.String("model-url", "http://127.0.0.1:8080/v1", "the model's OpenAI-compatible address, on this machine")
 	model := fs.String("model", "", "the model's name, sent with each request and written in each result; empty runs connect only")
 	maxTokens := fs.Int("max-tokens", 4096, "the most a reply may be")
+	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	once := fs.Bool("once", false, "one pass over the list, then exit")
 	only := fs.String("only", "", "test this slug alone, whenever it was last tested")
@@ -108,7 +109,7 @@ func run(args []string) error {
 		UserAgent: fmt.Sprintf("anchor-lab/%s (+https://www.anchorterminal.com/benchmark/; %s)", version, *contact),
 	}
 	if *model != "" {
-		b, err := newBrain(*modelURL, *model, *maxTokens, *modelWait)
+		b, err := newBrain(*modelURL, *model, *maxTokens, *modelWait, *temperature)
 		if err != nil {
 			return err
 		}
@@ -163,11 +164,19 @@ func run(args []string) error {
 	return nil
 }
 
-func newBrain(url, model string, maxTokens int, wait time.Duration) (*brain.Client, error) {
+func newBrain(url, model string, maxTokens int, wait time.Duration, temperature string) (*brain.Client, error) {
 	if err := brain.Local(url); err != nil {
 		return nil, fmt.Errorf("-model-url: %w (the prompts hold strangers' text and stay on this machine)", err)
 	}
-	return &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait}, nil
+	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait}
+	if temperature = strings.TrimSpace(temperature); temperature != "" {
+		t, err := strconv.ParseFloat(temperature, 64)
+		if err != nil || t < 0 || t > 2 {
+			return nil, fmt.Errorf("-temperature: a number from 0 to 2, or empty for the model server's own, got %q", temperature)
+		}
+		c.Temperature = &t
+	}
+	return c, nil
 }
 
 // dialer is how the harness gets a fresh cell: the socket systemd listens on, or with unsafe a
@@ -194,6 +203,7 @@ func benchCmd(args []string) error {
 	modelURL := fs.String("model-url", "http://127.0.0.1:8080/v1", "the model's OpenAI-compatible address, on this machine")
 	model := fs.String("model", "", "the model to score, as its server knows it")
 	maxTokens := fs.Int("max-tokens", 4096, "the most a reply may be")
+	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	compare := fs.Bool("compare", false, "print every score so far, best first, and exit")
 	fs.Parse(args)
@@ -215,7 +225,7 @@ func benchCmd(args []string) error {
 	if *model == "" {
 		return errors.New("-model: which model to score")
 	}
-	b, err := newBrain(*modelURL, *model, *maxTokens, *modelWait)
+	b, err := newBrain(*modelURL, *model, *maxTokens, *modelWait, *temperature)
 	if err != nil {
 		return err
 	}

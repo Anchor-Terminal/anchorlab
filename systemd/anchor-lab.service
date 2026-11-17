@@ -13,8 +13,8 @@ Requires=anchor-lab-cell.socket
 User=anchorlab
 Group=anchorlab
 EnvironmentFile=-/etc/anchor-lab/env
-ExecStart=/usr/local/bin/anchor-lab run -state /var/lib/anchor-lab -model "${ANCHOR_LAB_MODEL}" -model-url "${ANCHOR_LAB_MODEL_URL}"
-Environment=ANCHOR_LAB_MODEL= ANCHOR_LAB_MODEL_URL=http://127.0.0.1:8080/v1
+ExecStart=/usr/local/bin/anchor-lab run -state /var/lib/anchor-lab -model "${ANCHOR_LAB_MODEL}" -model-url "${ANCHOR_LAB_MODEL_URL}" -temperature "${ANCHOR_LAB_TEMPERATURE}"
+Environment=ANCHOR_LAB_MODEL= ANCHOR_LAB_MODEL_URL=http://127.0.0.1:8080/v1 ANCHOR_LAB_TEMPERATURE=
 Restart=on-failure
 RestartSec=30
 

@@ -21,4 +21,9 @@ private bench set.
 - Commits and pull requests are in Vlad's name: author `Vlad Cealicu <me@vladcealicu.com>`, no
   `Co-Authored-By` or session lines in commit messages, and no "Generated with" footer in a pull
   request's description.
+- `private/` is ignored by git, apart from its README and `settings.example.env`. Results,
+  transcripts, our settings and anything else that's ours go there, never anywhere else.
+- MODELS.md and `models/` are how the models run. A new model or build is a line in
+  `models/models.txt` with its size and SHA-256 from the Hub, a section in `models/presets.ini` with
+  its publisher's sampling, and a row in MODELS.md.
 - Decisions go into DESIGN.md in the same pull request, with the reason.

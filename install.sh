@@ -29,6 +29,11 @@ install -d -o root -g anchorlab -m 0750 /etc/anchor-lab
 ANCHOR_LAB_MODEL=
 ANCHOR_LAB_MODEL_URL=http://127.0.0.1:8080/v1
 ENV
+# Empty sends no temperature, so the model server's preset for the model applies (MODELS.md).
+grep -q '^ANCHOR_LAB_TEMPERATURE=' /etc/anchor-lab/env || cat >>/etc/anchor-lab/env <<'ENV'
+# A temperature for every model, or empty for each model's own from the server's presets.
+ANCHOR_LAB_TEMPERATURE=
+ENV
 # The stats for the site's admin page (anchor-lab-stats.service): the box's own address and a port,
 # and the site's server's address. Left empty, the stats service stays off. Added to an env file
 # from before it existed.

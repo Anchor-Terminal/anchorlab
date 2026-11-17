@@ -57,7 +57,9 @@ The box needs the GPU to have most of the memory, and a recent Mesa for its Vulk
 ## 2. llama.cpp
 
 Debian packages llama.cpp only in testing and unstable, and router mode, the presets and the newest
-models all need a recent build, so it's built from source with Vulkan:
+models all need a recent build, so it's built from source with Vulkan. It's the one program on the
+box that isn't Debian's (DESIGN.md, "Debian first"), and it's built with Debian's compiler against
+Debian's libraries:
 
 ```
 apt install build-essential cmake git libssl-dev libvulkan-dev glslc spirv-headers

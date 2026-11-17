@@ -46,7 +46,7 @@ func statusCmd(args []string, out io.Writer) error {
 		// reading the folder, not just finding it: a user outside the anchorlab group can see it's
 		// there and read nothing in it, and the numbers would all be zero
 		if _, err := os.ReadDir(*state); err != nil {
-			return stats.Stats{}, fmt.Errorf("%s: %w (on the box, run it with sudo, or as a user in the anchorlab group; elsewhere, -from http://<box>:8790)", *state, err)
+			return stats.Stats{}, fmt.Errorf("%s: %w (on the box, this user has to be in the anchorlab group: install.sh adds whoever ran it, from their next login, so log in again; elsewhere, -from http://<box>:8790)", *state, err)
 		}
 		settings := readEnv(*env)
 		var ds []string

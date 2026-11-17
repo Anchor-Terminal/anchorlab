@@ -100,7 +100,7 @@ func TestStatusCantRead(t *testing.T) {
 	defer os.Chmod(dir, 0o755)
 	var out bytes.Buffer
 	err := statusCmd([]string{"-state", dir, "-env", "/nonexistent"}, &out)
-	if err == nil || !strings.Contains(err.Error(), "sudo") {
+	if err == nil || !strings.Contains(err.Error(), "anchorlab group") || strings.Contains(err.Error(), "sudo") {
 		t.Errorf("unreadable state: %v\n%s", err, out.String())
 	}
 }

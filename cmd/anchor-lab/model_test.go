@@ -30,6 +30,11 @@ func router(t *testing.T, loaded *string) *httptest.Server {
 		case "/models/load":
 			var b struct{ Model string }
 			json.NewDecoder(r.Body).Decode(&b)
+			if b.Model == *loaded {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error":{"code":400,"message":"model is already running","type":"invalid_request_error"}}`))
+				return
+			}
 			*loaded = b.Model
 			w.Write([]byte(`{"success":true}`))
 		default:
@@ -69,6 +74,10 @@ func TestModelSwitch(t *testing.T) {
 	}
 	if loaded != "gemma-4-26b-a4b" {
 		t.Errorf("the server wasn't asked to load it: %s", loaded)
+	}
+	out.Reset()
+	if err := modelCmd([]string{"-env", env, "-state", state, "use", "gemma-4-26b-a4b"}, &out); err != nil || strings.Contains(out.String(), "HTTP 400") {
+		t.Errorf("the model already loaded is no error: %v\n%s", err, out.String())
 	}
 	out.Reset()
 	modelCmd([]string{"-env", env, "-state", state}, &out)

@@ -188,6 +188,10 @@ func loadModel(server, name string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		b, _ := io.ReadAll(io.LimitReader(resp.Body, 300))
+		// the model being loaded already is what we asked for
+		if bytes.Contains(b, []byte("already running")) || bytes.Contains(b, []byte("already loaded")) {
+			return nil
+		}
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, bytes.TrimSpace(b))
 	}
 	return nil

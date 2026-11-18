@@ -43,6 +43,8 @@ type Options struct {
 	Journal    *journal.Journal
 	Brain      agent.Brain
 	Model      string
+	// where a task falls in the evaluation, for the events: set by Run and RunN
+	pass, passes, n, of int
 	Dial       func(ctx context.Context) (io.ReadWriteCloser, error) // a fresh cell
 	Limits     gateway.Limits                                        // for the MCP server; MaxCalls is also the fetches a task may make
 	UserAgent  string
@@ -110,7 +112,9 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	run := started.Format("20060102T150405") + "-eval-" + t.ID
 	j := o.Journal
 	j.Place(run, o.Model, "anchor-lab-eval", t.ID)
-	j.Event(run, "eval.task", map[string]any{"task": t.ID, "level": t.Level, "harness": o.Version, "set": Version})
+	pass, passes := max(o.pass, 1), max(o.passes, 1)
+	j.Event(run, "eval.task", map[string]any{"task": t.ID, "level": t.Level, "harness": o.Version, "set": Version,
+		"model": o.Model, "pass": pass, "passes": passes, "n": o.n, "of": o.of})
 
 	sess, tools, err := open(ctx, MCPURL(), o.UserAgent, o.Limits)
 	if err != nil {
@@ -434,10 +438,13 @@ func Run(ctx context.Context, o Options) []TaskResult {
 		o.Sources = NewSources(o.UserAgent)
 	}
 	var out []TaskResult
-	for _, t := range o.tasks() {
+	tasks := o.tasks()
+	o.of = len(tasks)
+	for i, t := range tasks {
 		if ctx.Err() != nil {
 			break
 		}
+		o.n = i + 1
 		out = append(out, RunTask(ctx, o, t))
 	}
 	return out
@@ -454,7 +461,9 @@ func RunN(ctx context.Context, o Options, n int) Score {
 	}
 	started := time.Now().UTC()
 	var passes [][]TaskResult
+	o.passes = n
 	for i := 0; i < n && ctx.Err() == nil; i++ {
+		o.pass = i + 1
 		passes = append(passes, Run(ctx, o))
 	}
 	s := Fold(o.tasks(), passes)

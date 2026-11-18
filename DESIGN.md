@@ -249,6 +249,14 @@ small, they use the standard library only, and they treat everything above as da
   level 2 task counting twice and a level 3 task three times, out of the tasks scored, weighted the
   same way, so two models that both get every easy question right are told apart by the hard ones.
   Scores are ranked by it, and it's what the site shows on a model's listing.
+- **What the lab is doing shows where Vlad looks.** Vlad, 18 November 2026, of the admin page's Lab
+  tab: "i should see what it's doing on the lab page, that's where i wanted it". The stats carry
+  the evaluation in progress (which question of which pass, how many right, wrong and skipped so
+  far, when it started) and the queue in the inbox, in the order the harness takes it, and
+  `anchor-lab status` prints both. Each question's `eval.task` event says where it falls, so the
+  stats count it from the eval journal without reading results. An evaluation runs for hours, so
+  the stats read yesterday's events for one that started before midnight. The queue is words from
+  a fixed list and model names that pass the same check as everywhere else.
 - **Time is part of the benchmark, as its own number.** Vlad, 18 November 2026: "we should record
   everything and the time taken should be part of our benchmark", and asked whether time should
   count inside the Lab score or beside it, beside it. A score carries the seconds a question takes

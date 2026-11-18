@@ -163,8 +163,9 @@ on them as its own user. Nothing in this README asks for sudo after the install.
 
 ## Talking to the lab
 
-`anchor-lab status` is the lab from a terminal: what it's testing now, today's counts, the machine,
-and the latest results.
+`anchor-lab status` is the lab from a terminal: what it's testing now (for an evaluation, which
+question of which pass, how many right so far and when it should end), what's waiting in the inbox,
+today's counts, the machine, and the latest results. The admin page's Lab tab shows the same.
 
 ```
 anchor-lab status                                 # on the box: reads the state itself

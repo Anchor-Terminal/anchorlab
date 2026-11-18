@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -234,5 +236,69 @@ func TestBenching(t *testing.T) {
 	f.Close()
 	if s := Collect(c); s.Benching != "" {
 		t.Errorf("after the end: %q", s.Benching)
+	}
+}
+
+// An evaluation that started before midnight still shows the next day, with how far it's got from
+// the eval journal: which question of which pass, and how many came out right.
+func TestProgress(t *testing.T) {
+	c, _ := fixture(t)
+	write(t, filepath.Join(c.State, "events", "2026-11-16.ndjson"),
+		`{"t":"2026-11-16T22:00:00Z","run":"","ev":"eval.start","model":"gemma-4-31b"}`+"\n")
+	// today the harness hasn't restarted: a restart would have stopped the evaluation
+	write(t, filepath.Join(c.State, "events", "2026-11-17.ndjson"), `{"t":"2026-11-17T09:00:00Z","run":"","ev":"targets.dropped","n":1}`+"\n")
+	task := func(at string, pass, n int) string {
+		return `{"t":"` + at + `","run":"20261116T2200` + strconv.Itoa(n) + `-eval-t","ev":"eval.task","task":"t","model":"gemma-4-31b","pass":` + strconv.Itoa(pass) + `,"passes":3,"n":` + strconv.Itoa(n) + `,"of":59}`
+	}
+	end := func(at, status string, n int) string {
+		return `{"t":"` + at + `","run":"20261116T2200` + strconv.Itoa(n) + `-eval-t","ev":"eval.end","task":"t","status":"` + status + `"}`
+	}
+	write(t, filepath.Join(c.State, "eval", "events", "2026-11-16.ndjson"), strings.Join([]string{
+		task("2026-11-16T21:00:00Z", 1, 1), end("2026-11-16T21:01:00Z", "correct", 1), // an older evaluation, stopped
+		task("2026-11-16T22:00:01Z", 1, 1), end("2026-11-16T22:02:00Z", "correct", 1),
+		task("2026-11-16T22:02:01Z", 1, 2), end("2026-11-16T22:05:00Z", "wrong", 2),
+	}, "\n")+"\n")
+	write(t, filepath.Join(c.State, "eval", "events", "2026-11-17.ndjson"), strings.Join([]string{
+		task("2026-11-17T13:00:00Z", 2, 1), end("2026-11-17T13:02:00Z", "skipped", 1),
+		task("2026-11-17T13:02:01Z", 2, 2),
+		`{"t":"2026-11-17T13:03:00Z","run":"x","ev":"eval.task","model":"evil <b>","pass":1,"passes":3,"n":1,"of":59}`,
+	}, "\n")+"\n")
+	s := Collect(c)
+	p := s.Progress
+	if s.Evaluating != "gemma-4-31b" || p == nil {
+		t.Fatalf("evaluating %q, progress %+v", s.Evaluating, p)
+	}
+	if p.Pass != 2 || p.Question != 2 || p.Of != 59 || p.Passes != 3 || p.Done != 3 || p.Right != 1 || p.Wrong != 1 || p.Skipped != 1 ||
+		!p.Started.Equal(time.Date(2026, 11, 16, 22, 0, 1, 0, time.UTC)) {
+		t.Errorf("progress: %+v", p)
+	}
+	// once it ends there's nothing in progress
+	f, _ := os.OpenFile(filepath.Join(c.State, "events", "2026-11-17.ndjson"), os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"t":"2026-11-17T13:58:00Z","run":"","ev":"eval.end","model":"gemma-4-31b"}` + "\n")
+	f.Close()
+	if s := Collect(c); s.Evaluating != "" || s.Progress != nil {
+		t.Errorf("after the end: %q %+v", s.Evaluating, s.Progress)
+	}
+}
+
+// The queue is the inbox's requests in the order the harness takes them, with no name it
+// wouldn't take.
+func TestQueue(t *testing.T) {
+	c, _ := fixture(t)
+	if s := Collect(c); s.Queue == nil || len(s.Queue) != 0 {
+		t.Errorf("an empty inbox: %#v", s.Queue)
+	}
+	for _, m := range []string{"qwen3.8-27b", "gemma-4-31b"} {
+		if err := journal.QueueEval(c.State, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	journal.QueueBench(c.State, "gpt-oss-20b")
+	journal.QueueRetest(c.State, "glm-4.7-flash", []string{"exa-mcp", "reqres"})
+	write(t, filepath.Join(c.State, "inbox", "eval-bad.request"), "evil <b>\n1\n")
+	got := Collect(c).Queue
+	want := []Queued{{Kind: "retest", Model: "glm-4.7-flash", Servers: 2}, {Kind: "bench", Model: "gpt-oss-20b"}, {Kind: "evaluate", Model: "qwen3.8-27b"}, {Kind: "evaluate", Model: "gemma-4-31b"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("queue:\n got %+v\nwant %+v", got, want)
 	}
 }

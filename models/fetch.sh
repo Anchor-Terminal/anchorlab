@@ -3,8 +3,11 @@
 #
 #   models/fetch.sh list                  what's in the list, and what's here already
 #   models/fetch.sh gpt-oss-120b          one model (every file it has)
-#   models/fetch.sh all                   every model, about 277 GB
+#   models/fetch.sh all                   every model, about 1.02 TB
 #   models/fetch.sh -check all            hash what's here again, download nothing
+#   models/fetch.sh remove qwen3.6-27b    delete a model's files (not the one the lab uses)
+#   models/fetch.sh swap OLD NEW          download NEW, switch the lab to it, then delete OLD
+#   models/fetch.sh prune                 delete files in $MODELS that no line of models.txt names
 #
 # Files go in $MODELS/<folder>/ (models.txt has the folder; MODELS defaults to /srv/models). A
 # download that stops is picked up where it stopped. A finished file is hashed once and a
@@ -39,6 +42,85 @@ if [ "$1" = "list" ]; then
     exit 0
 fi
 
+# the model the lab uses now: the inbox's choice, else the one it started with
+STATE="${ANCHOR_LAB_STATE:-/var/lib/anchor-lab}"
+in_use() {
+    local m=""
+    [ -r "$STATE/inbox/model" ] && m="$(head -n1 "$STATE/inbox/model" | tr -d '[:space:]')"
+    if [ -z "$m" ] && [ -r /etc/anchor-lab/env ]; then
+        m="$(sed -n 's/^ANCHOR_LAB_MODEL=//p' /etc/anchor-lab/env | tail -n1 | tr -d "\"'[:space:]")"
+    fi
+    echo "$m"
+}
+
+# remove deletes every file of the named models (and their .sha256 and any part-download). It
+# refuses the model the lab uses, unless -force: switch first (swap does both).
+remove() {
+    local force=0; [ "${1:-}" = "-force" ] && { force=1; shift; }
+    [ $# -gt 0 ] || { echo "remove: which model (models/fetch.sh list)"; exit 2; }
+    local cur; cur="$(in_use)"
+    for n in "$@"; do
+        rows | awk -v n="$n" '$1 == n' | grep -q . || { echo "no model $n in models.txt (models/fetch.sh list; prune deletes files no line names)"; exit 1; }
+        if [ "$n" = "$cur" ] && [ "$force" = 0 ]; then
+            echo "$n is the model the lab uses: switch first (models/fetch.sh swap $n <another>, or anchor-lab model use <another>), or -force"; exit 1
+        fi
+    done
+    local freed=0
+    for n in "$@"; do
+        while read -r name folder repo file bytes sha; do
+            path="$MODELS/$folder/$file"
+            if [ -f "$path" ]; then freed=$((freed + $(stat -c %s "$path"))); fi
+            rm -f -- "$path" "$path.sha256"
+            echo "$name: deleted $file"
+        done < <(rows | awk -v n="$n" '$1 == n')
+        # the folder too, and any build folder in it, once nothing is left
+        folder="$(rows | awk -v n="$n" '$1 == n {print $2; exit}')"
+        [ -d "$MODELS/$folder" ] && find "$MODELS/$folder" -depth -type d -empty -delete 2>/dev/null || true
+    done
+    echo "freed $(human $freed) in $MODELS ($(human "$(free_bytes "$MODELS")") free now)"
+}
+
+if [ "$1" = "remove" ]; then
+    shift
+    free_bytes() { df -B1 --output=avail "$1" | tail -n1 | tr -d ' '; }
+    remove "$@"
+    exit 0
+fi
+
+if [ "$1" = "prune" ]; then
+    free_bytes() { df -B1 --output=avail "$1" | tail -n1 | tr -d ' '; }
+    known="$(rows | awk '{print $2 "/" $4}')"
+    freed=0; n=0
+    while IFS= read -r -d '' path; do
+        rel="${path#"$MODELS"/}"; rel="${rel%.sha256}"
+        if ! grep -qxF -- "$rel" <<<"$known"; then
+            [ -f "$path" ] && freed=$((freed + $(stat -c %s "$path")))
+            rm -f -- "$path"; n=$((n + 1)); echo "deleted $rel$([ "${path%.sha256}" != "$path" ] && echo .sha256)"
+        fi
+    done < <(find "$MODELS" -type f \( -name '*.gguf' -o -name '*.gguf.sha256' \) -print0)
+    find "$MODELS" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    echo "deleted $n files no line of models.txt names, freed $(human $freed)"
+    exit 0
+fi
+
+if [ "$1" = "swap" ]; then
+    [ $# -eq 3 ] || { echo "swap: models/fetch.sh swap OLD NEW"; exit 2; }
+    old="$2"; new="$3"
+    for n in "$old" "$new"; do
+        rows | awk -v n="$n" '$1 == n' | grep -q . || { echo "no model $n in models.txt (models/fetch.sh list)"; exit 1; }
+    done
+    [ "$old" != "$new" ] || { echo "swap: two different models"; exit 2; }
+    "${BASH_SOURCE[0]}" "$new" || { echo "swap: $new didn't download and check, so nothing was switched or deleted"; exit 1; }
+    if [ "$(in_use)" = "$old" ]; then
+        lab="$(command -v anchor-lab || true)"
+        [ -n "$lab" ] || { echo "swap: no anchor-lab on PATH to switch the lab; $old is still in use and still here"; exit 1; }
+        "$lab" model use "$new" || { echo "swap: the lab didn't switch to $new (is it in /etc/llama/models.ini? sudo bash models/install.sh puts a new model's preset there); $old is still here"; exit 1; }
+    fi
+    free_bytes() { df -B1 --output=avail "$1" | tail -n1 | tr -d ' '; }
+    remove -force "$old"
+    exit 0
+fi
+
 want=("$@")
 [ "$1" = "all" ] && mapfile -t want < <(names)
 for n in "${want[@]}"; do
@@ -51,6 +133,7 @@ failed=0
 for n in "${want[@]}"; do
     while read -r name folder repo file bytes sha; do
         dir="$MODELS/$folder"; path="$dir/$file"
+        dir="$(dirname "$path")"   # some repositories keep a build in a folder of its own
         mkdir -p "$dir"
         if [ "$check" = 0 ] && [ -f "$path.sha256" ] && [ "$(cat "$path.sha256")" = "$sha" ] && [ "$(stat -c %s "$path" 2>/dev/null || echo 0)" = "$bytes" ]; then
             echo "$name: $file is here and checked"

@@ -303,9 +303,15 @@ small, they use the standard library only, and they treat everything above as da
   keep their mode and aren't compared across modes; a score from before modes is code mode. Each
   task records how the model got there (native, program, both or none) and a score sums them in
   `paths`, so which path a model takes, and whether it pays on the hard tasks, is in the record.
-  A model server whose chat template takes no tools refuses a request with tools in it; the task
-  then carries on with programs only and the score counts it in `noTools`, so a model isn't
-  marked down for its server. The checkpoint keeps the mode, and isn't carried on in the other.
+  A request with tools that fails is tried once more with them, since a malformed tool call is
+  often bad luck in the sampling; if it fails again, at any turn, the task carries on with
+  programs only, the conversation so far rewritten as plain text (what was called, what came
+  back) with no two turns of the same role in a row, and the score counts it in `noTools`. A
+  model server whose chat template takes no tools lands there on the first turn. Vlad, 18
+  November 2026: "if a model fails with the tool call we can test with the code call, we should
+  try to get it to do the thing". So the first native call in a task that comes back with an
+  error also says, once, that a program can make the same call. A model isn't marked down for
+  its server, and one whose own tool calls don't work still gets the chance to answer. The checkpoint keeps the mode, and isn't carried on in the other.
 - **A stopped evaluation carries on where it stopped.** Vlad, 18 November 2026: "can we add a thing
   to be able to stop and continue mid eval? this way we don't waste that much time every time, like
   now i cna;'t deploy for another few hours until the eval run i started at 6 finsihes". Each

@@ -147,3 +147,91 @@ func TestEitherNoTools(t *testing.T) {
 		t.Errorf("noTools %d", s.NoTools)
 	}
 }
+
+// flaky refuses requests with tools from its second request on: a model whose tool calls the
+// server can't read once the conversation has some.
+type flaky struct {
+	toolScript
+	calls int
+}
+
+func (s *flaky) ChatTools(ctx context.Context, msgs []brain.Message, tools []brain.Tool) (brain.Message, brain.Usage, error) {
+	s.calls++
+	if len(tools) > 0 && s.calls > 1 {
+		return brain.Message{}, brain.Usage{}, errors.New("the model answered HTTP 500: failed to parse tool call")
+	}
+	return s.toolScript.ChatTools(ctx, msgs, tools)
+}
+
+// A request with tools that fails twice in the middle of a task doesn't end it: the task carries
+// on with programs only, its tool calls and answers written as text, with no two turns of the same
+// role in a row.
+func TestEitherFallsBackMidTask(t *testing.T) {
+	b := &flaky{toolScript: toolScript{replies: []brain.Message{
+		{Role: "assistant", ToolCalls: []brain.ToolCall{call("c1", "lab_fetch", `{"path":"/a"}`), call("c2", "lab_fetch", `{"path":"/b"}`)}},
+		{Role: "assistant", Content: "ANSWER: 5"},
+	}}}
+	o := Options{Brain: b, Journal: testJournal(t), Mode: ModeEither, MaxTurns: 6}
+	fetch := func(json.RawMessage) gateway.Reply { return gateway.Reply{OK: true, Text: "five"} }
+	var r TaskResult
+	answer, gave := o.converseEither(context.Background(), "run", Task{ID: "t", Ask: "?"}, nil, nil, fetch, &r)
+	if !gave || answer != "5" || !r.NoTools || r.Native != 2 {
+		t.Fatalf("%q %v %+v", answer, gave, r)
+	}
+	last := b.sent[len(b.sent)-1]
+	for i, m := range last {
+		if m.Role == "tool" || len(m.ToolCalls) > 0 {
+			t.Errorf("a tool turn reached a request with no tools: %+v", m)
+		}
+		if i > 0 && last[i-1].Role == m.Role {
+			t.Errorf("two %s turns in a row", m.Role)
+		}
+	}
+	if s := last[len(last)-1].Content; !strings.Contains(s, "What lab_fetch returned:\nfive") || !strings.Contains(s, "Carry on with programs") {
+		t.Errorf("the last turn: %q", s)
+	}
+}
+
+// One failed request with tools is tried again with them before falling back.
+func TestEitherRetriesOnce(t *testing.T) {
+	b := &onceBad{toolScript: toolScript{replies: []brain.Message{{Role: "assistant", Content: "ANSWER: 1"}}}}
+	o := Options{Brain: b, Journal: testJournal(t), Mode: ModeEither, MaxTurns: 4}
+	var r TaskResult
+	if answer, gave := o.converseEither(context.Background(), "run", Task{ID: "t", Ask: "?"}, nil, nil, nil, &r); !gave || answer != "1" || r.NoTools {
+		t.Fatalf("%q %v %+v", answer, gave, r)
+	}
+}
+
+type onceBad struct {
+	toolScript
+	failed bool
+}
+
+func (s *onceBad) ChatTools(ctx context.Context, msgs []brain.Message, tools []brain.Tool) (brain.Message, brain.Usage, error) {
+	if !s.failed {
+		s.failed = true
+		return brain.Message{}, brain.Usage{}, errors.New("the model answered HTTP 500: failed to parse tool call")
+	}
+	return s.toolScript.ChatTools(ctx, msgs, tools)
+}
+
+// A native call that errors says, once a task, that a program can make the same call.
+func TestEitherHintsAProgram(t *testing.T) {
+	b := &toolScript{replies: []brain.Message{
+		{Role: "assistant", ToolCalls: []brain.ToolCall{call("c1", "lab_fetch", `{"path":"/x"}`), call("c2", "lab_fetch", `{"path":"/y"}`)}},
+		{Role: "assistant", Content: "ANSWER: NONE"},
+	}}
+	o := Options{Brain: b, Journal: testJournal(t), Mode: ModeEither, MaxTurns: 4}
+	fetch := func(json.RawMessage) gateway.Reply { return gateway.Reply{Error: "HTTP 404"} }
+	var r TaskResult
+	o.converseEither(context.Background(), "run", Task{ID: "t", Ask: "?"}, nil, nil, fetch, &r)
+	n := 0
+	for _, m := range b.sent[1] {
+		if m.Role == "tool" && strings.Contains(m.Content, `run_program, with tool.Call("lab.fetch", args)`) {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("the hint came %d times, want once", n)
+	}
+}

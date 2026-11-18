@@ -282,6 +282,12 @@ small, they use the standard library only, and they treat everything above as da
   and benches (`bench-<model>.request`, run between tests, so their files are the lab's). Sudo
   for day-to-day work would mean a root shell open on the machine that runs strangers' code, and
   files owned by whoever typed the command.
+- **Requests run in the order they were asked for.** A bench or evaluation request carries the
+  time it was made, in nanoseconds, and the harness takes them oldest first by that, then by name.
+  It used to go by the file's own time, which is only as fine as the filesystem's clock tick: seven
+  evaluations queued in one loop on 18 November 2026 got the same time and ran in name order. A
+  model asked for again while it waits keeps its place. Vlad: "yeah do a small pr we'll do it after
+  the evals finish".
 - **A server is retested per model.** The seven days a test stands are counted per server and
   model, so switching models tests every server again under the new one.
 - **A bench with no program in a cell keeps no score.** If the model wrote programs and none

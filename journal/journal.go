@@ -307,7 +307,7 @@ func modelRequests(state, prefix string) (models []string, files []string) {
 	paths, _ := filepath.Glob(filepath.Join(state, "inbox", prefix+"*.request"))
 	type req struct {
 		path, model string
-		at          time.Time
+		at          int64
 	}
 	var rs []req
 	for _, p := range paths {
@@ -316,9 +316,22 @@ func modelRequests(state, prefix string) (models []string, files []string) {
 		if err != nil || err2 != nil {
 			continue
 		}
-		rs = append(rs, req{p, strings.TrimSpace(string(b)), fi.ModTime()})
+		// the first line is the model; the second, when it's there, is when it was asked for in
+		// nanoseconds (queueModel). A file's own time is only as fine as the filesystem's clock
+		// tick, so requests made a few milliseconds apart would tie and run in name order.
+		model, rest, _ := strings.Cut(string(b), "\n")
+		at := fi.ModTime().UnixNano()
+		if n, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64); err == nil && n > 0 {
+			at = n
+		}
+		rs = append(rs, req{p, strings.TrimSpace(model), at})
 	}
-	sort.SliceStable(rs, func(i, j int) bool { return rs[i].at.Before(rs[j].at) })
+	sort.SliceStable(rs, func(i, j int) bool {
+		if rs[i].at != rs[j].at {
+			return rs[i].at < rs[j].at
+		}
+		return rs[i].path < rs[j].path
+	})
 	for _, r := range rs {
 		models, files = append(models, r.model), append(files, r.path)
 	}
@@ -433,7 +446,13 @@ func queueModel(state, prefix, model string) error {
 		}
 		return '-'
 	}, model) + ".request"
-	return WriteInbox(state, name, []byte(model+"\n"))
+	// a model already waiting keeps its place: asking again doesn't send it to the back
+	if b, err := os.ReadFile(filepath.Join(state, "inbox", name)); err == nil {
+		if first, _, _ := strings.Cut(string(b), "\n"); strings.TrimSpace(first) == model {
+			return nil
+		}
+	}
+	return WriteInbox(state, name, []byte(model+"\n"+strconv.FormatInt(time.Now().UnixNano(), 10)+"\n"))
 }
 
 // FailedWith is the servers whose latest explore with this model came out failure or partial.

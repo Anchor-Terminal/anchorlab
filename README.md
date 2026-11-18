@@ -167,6 +167,7 @@ anchor-lab status                                 # on the box: reads the state 
 anchor-lab status -from http://<the box>:8790     # from the machine the box lets ask (the stats below)
 anchor-lab status -watch                          # again every 10 seconds, until Ctrl-C
 anchor-lab status -json                           # the stats as they are, for a script
+anchor-lab retest -failed                         # test again what failed (Testing again, below)
 ```
 
 ```
@@ -200,6 +201,27 @@ ANCHOR_LAB_STATS_ALLOW=<the address that may ask>
 
 Run `install.sh` again: it turns `anchor-lab-stats` on and prints the firewall line to add, which
 lets only that address reach the port. The format is `anchor-lab-stats/1` (`stats/stats.go`).
+
+The same service answers `GET /v1/results?after=N`: the result lines after line N of
+`results.ndjson`, at most 500, in the export format (`anchor-lab-export/1 <next N>` on the first
+line, then the lines as the harness wrote them). The site keeps N and asks for what came after.
+
+## Testing again
+
+A server's test stands for 7 days, or until the model changes. To test some again sooner, with
+the lab's model or another:
+
+```
+anchor-lab retest kiwi letme                       # these two, with the lab's model
+anchor-lab retest -failed                          # every server the lab's model failed or partly failed
+anchor-lab retest -failed -model gpt-oss-120b      # the same servers with a second model
+anchor-lab retest -all -model gemma-4-31b          # a full test: every server, with that model
+```
+
+Like a bench, it's a request in the inbox (`retest-*.request`), which the harness takes between
+two tests. A second model on the servers the first one failed is how a server's fault is told from
+a model's: if both fail, it's the server. The model in use doesn't change, so the full test with
+another model gives results filed under that model without switching the lab to it.
 
 ## Picking the model
 

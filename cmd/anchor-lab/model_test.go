@@ -132,3 +132,48 @@ func TestBenchQueue(t *testing.T) {
 		t.Errorf("no bench.refused event:\n%s", b)
 	}
 }
+
+// retest -failed asks again for the servers the lab's model failed or partly failed, with the
+// model named or the lab's own; a slug that isn't one is refused.
+func TestRetest(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	journal.WriteInbox(state, "model", []byte("qwen3.5-122b-a10b\n"))
+	j, _ := journal.Open(state)
+	now := time.Now()
+	for _, r := range []journal.Result{
+		{Slug: "zenrows", Task: "explore", Model: "qwen3.5-122b-a10b", Outcome: "failure", Ended: now},
+		{Slug: "kiwi", Task: "explore", Model: "qwen3.5-122b-a10b", Outcome: "failure", Ended: now.Add(-time.Hour)},
+		{Slug: "kiwi", Task: "explore", Model: "qwen3.5-122b-a10b", Outcome: "success", Ended: now},
+		{Slug: "liteapi", Task: "explore", Model: "qwen3.5-122b-a10b", Outcome: "partial", Ended: now},
+		{Slug: "layerre", Task: "explore", Model: "gpt-oss-120b", Outcome: "failure", Ended: now},
+		{Slug: "exa", Task: "connect", Status: "ok", Ended: now},
+	} {
+		j.Result(r)
+	}
+	env := filepath.Join(t.TempDir(), "env")
+	var out bytes.Buffer
+	if err := retestCmd([]string{"-state", state, "-env", env, "-failed", "-model", "gpt-oss-120b", "letme"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	rs := journal.RetestRequests(state)
+	if len(rs) != 1 || rs[0].Model != "gpt-oss-120b" || strings.Join(rs[0].Slugs, ",") != "letme,liteapi,zenrows" {
+		t.Errorf("the request: %+v (%s)", rs, out.String())
+	}
+	os.Remove(rs[0].File)
+	if err := retestCmd([]string{"-state", state, "-env", env, "-all"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if rs = journal.RetestRequests(state); len(rs) != 1 || rs[0].Model != "qwen3.5-122b-a10b" || strings.Join(rs[0].Slugs, ",") != "*" {
+		t.Errorf("a full test: %+v", rs)
+	}
+	if err := retestCmd([]string{"-state", state, "-env", env, "-all", "kiwi"}, &out); err == nil {
+		t.Error("-all took a slug as well")
+	}
+	if err := retestCmd([]string{"-state", state, "-env", env, "../etc"}, &out); err == nil {
+		t.Error("took a slug that isn't one")
+	}
+	if err := retestCmd([]string{"-state", state, "-env", env, "-model", "../x", "kiwi"}, &out); err == nil {
+		t.Error("took a model that isn't one")
+	}
+}

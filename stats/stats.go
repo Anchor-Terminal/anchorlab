@@ -517,13 +517,18 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no", http.StatusForbidden)
 		return
 	}
-	if r.URL.Path != "/v1/stats" {
-		http.NotFound(w, r)
-		return
-	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "GET", http.StatusMethodNotAllowed)
+		return
+	}
+	switch r.URL.Path {
+	case "/v1/stats":
+	case "/v1/results":
+		sv.results(w, r)
+		return
+	default:
+		http.NotFound(w, r)
 		return
 	}
 	sv.mu.Lock()
@@ -542,6 +547,25 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Write(b)
+}
+
+// ResultsPage is the most result lines one answer of /v1/results carries.
+const ResultsPage = 500
+
+// results answers GET /v1/results?after=N with the result lines after line N, in the export format
+// (journal.Export): the lines as the harness wrote them, which are already only numbers and fixed
+// words, and which the site checks one field at a time all the same. The site keeps N and asks
+// for what came after it.
+func (sv *Server) results(w http.ResponseWriter, r *http.Request) {
+	after, err := strconv.Atoi(r.URL.Query().Get("after"))
+	if err != nil || after < 0 {
+		http.Error(w, "after: a line number", http.StatusBadRequest)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	journal.Export(sv.Config.State, after, ResultsPage, w)
 }
 
 // Listen checks the address it's given: a real address of this machine, never every interface,

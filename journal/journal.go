@@ -4,7 +4,7 @@
 //
 //	<state>/events/2026-11-15.ndjson                       every event of every run, in order; tail -f follows the lab
 //	<state>/research/<model>/<company>/<tool>/<run>/       code-1.go, output-1.txt, model-1.txt, tools.json
-//	<state>/results.ndjson                                 one Result a finished run; `anchor-lab sync export` reads it
+//	<state>/results.ndjson                                 one Result a finished run; Export reads it, for `anchor-lab sync export` and the stats server's /v1/results
 //
 // Only results.ndjson leaves the box, and a Result holds numbers, names from fixed lists and the
 // server's own tool names: no sentence a model or a tool wrote (DESIGN.md).
@@ -14,6 +14,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -307,4 +308,86 @@ func BenchRequests(state string) (models []string, files []string) {
 		models, files = append(models, r.model), append(files, r.path)
 	}
 	return models, files
+}
+
+// ExportVersion is the first line of an export: the format, then the line the next ask starts after.
+const ExportVersion = "anchor-lab-export/1"
+
+// Export writes results.ndjson from the line after `after`: a first line "anchor-lab-export/1 N",
+// then the lines as they are in the file. N is the line the next ask should start after. At most
+// max lines are sent when max is above 0, and N then stops at the last one sent. A last line with
+// no newline yet is being written and waits for the next ask. N below after means the file is
+// shorter than the asker thinks, and it should start again from 0.
+func Export(dir string, after, max int, w io.Writer) error {
+	f, err := os.Open(filepath.Join(dir, "results.ndjson"))
+	if os.IsNotExist(err) {
+		_, err = fmt.Fprintf(w, "%s 0\n", ExportVersion)
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	br := bufio.NewReaderSize(f, 64<<10)
+	var lines [][]byte
+	n := 0
+	for {
+		line, err := br.ReadBytes('\n')
+		if err != nil { // io.EOF, with or without a half-written line
+			break
+		}
+		n++
+		if n > after {
+			lines = append(lines, line)
+			if max > 0 && len(lines) == max {
+				break
+			}
+		}
+	}
+	bw := bufio.NewWriter(w)
+	fmt.Fprintf(bw, "%s %d\n", ExportVersion, n)
+	for _, l := range lines {
+		bw.Write(l)
+	}
+	return bw.Flush()
+}
+
+// RetestRequest is a list of servers to test again with one model, from
+// <state>/inbox/retest-*.request: the model on the first line, a slug a line after it.
+// `anchor-lab retest` writes them, and the harness runs them between tests, oldest first.
+type RetestRequest struct {
+	Model string
+	Slugs []string
+	File  string
+}
+
+// RetestRequests are the retests waiting, oldest first.
+func RetestRequests(state string) []RetestRequest {
+	paths, _ := filepath.Glob(filepath.Join(state, "inbox", "retest-*.request"))
+	type req struct {
+		RetestRequest
+		at time.Time
+	}
+	var rs []req
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		fi, err2 := os.Stat(p)
+		if err != nil || err2 != nil || len(b) > 64<<10 {
+			continue
+		}
+		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		r := req{RetestRequest{Model: strings.TrimSpace(lines[0]), File: p}, fi.ModTime()}
+		for _, l := range lines[1:] {
+			if l = strings.TrimSpace(l); l != "" {
+				r.Slugs = append(r.Slugs, l)
+			}
+		}
+		rs = append(rs, r)
+	}
+	sort.SliceStable(rs, func(i, j int) bool { return rs[i].at.Before(rs[j].at) })
+	out := make([]RetestRequest, len(rs))
+	for i, r := range rs {
+		out[i] = r.RetestRequest
+	}
+	return out
 }

@@ -162,6 +162,18 @@ func TestServer(t *testing.T) {
 	if w := ask("192.168.1.100:5000", "POST", "/v1/stats"); w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("POST: %d", w.Code)
 	}
+	// the result lines, for the site's collector
+	if w := ask("192.168.1.100:5000", "GET", "/v1/results?after=0"); w.Code != 200 || !strings.HasPrefix(w.Body.String(), journal.ExportVersion+" ") {
+		t.Errorf("results: %d %s", w.Code, w.Body)
+	}
+	for _, q := range []string{"", "?after=-1", "?after=x"} {
+		if w := ask("192.168.1.100:5000", "GET", "/v1/results"+q); w.Code != http.StatusBadRequest {
+			t.Errorf("results%s: %d", q, w.Code)
+		}
+	}
+	if w := ask("192.168.1.101:5000", "GET", "/v1/results?after=0"); w.Code != http.StatusForbidden {
+		t.Errorf("results to anyone else: %d", w.Code)
+	}
 }
 
 func TestListen(t *testing.T) {

@@ -373,6 +373,13 @@ small, they use the standard library only, and they treat everything above as da
   carries code or an address: the servers to call still come from the public list, and a key only
   ever goes to the server it was sealed for. The service that takes the commands can store a
   sealed key and can't open one.
+- **The models list carries each model's size.** Vlad, 18 November 2026, of the Lab tab's models
+  table: "can we show models size as well? in GB?". `modelSizes` in the stats is the bytes of each
+  model the server offers that models.txt lists, read from the list built into the harness
+  (package models): the size the Hub gave, which fetch.sh checks a download against, so the stats
+  service needs no read of the models folder. A model from a preset of our own isn't in the list
+  and has no size. It's a field added beside the others, so `anchor-lab-stats/1` stays: nothing
+  that was there changes meaning.
 - **The box signs what it tells the site.** With the command secret set, the stats, the results
   and a transcript carry an HMAC over the version, the time, the path and the body. The stats are
   where the site learns the box's public key, so an unsigned one would let another machine on the

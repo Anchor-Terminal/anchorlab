@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Anchor-Terminal/anchorlab/journal"
+	"github.com/Anchor-Terminal/anchorlab/models"
 	"github.com/Anchor-Terminal/anchorlab/seal"
 	"github.com/Anchor-Terminal/anchorlab/targets"
 )
@@ -71,8 +72,10 @@ type Stats struct {
 	Keys []KeyHeld `json:"keys"`
 	// Models are what the model server offers, for the site's model picker
 	Models []string `json:"models,omitempty"`
-	Recent []Result `json:"recent"`
-	System System   `json:"system"`
+	// ModelSizes is the size in bytes of each of Models that models.txt lists (package models)
+	ModelSizes map[string]int64 `json:"modelSizes,omitempty"`
+	Recent     []Result         `json:"recent"`
+	System     System           `json:"system"`
 }
 
 // Current is the run in progress.
@@ -284,6 +287,7 @@ func Collect(c Config) Stats {
 	s.Box, s.Keys = boxKey(c), keysHeld(c.State)
 	if c.Root == "" { // not in tests, which have no model server
 		s.Models = modelList(c.ModelURL)
+		s.ModelSizes = sizesOf(s.Models)
 	}
 	return s
 }
@@ -937,4 +941,19 @@ func queue(state string) []Queued {
 		}
 	}
 	return q
+}
+
+// sizesOf is the size in bytes of each model that models.txt lists, nil when none is.
+func sizesOf(ms []string) map[string]int64 {
+	sizes := models.Sizes()
+	var out map[string]int64
+	for _, m := range ms {
+		if n := sizes[m]; n > 0 {
+			if out == nil {
+				out = map[string]int64{}
+			}
+			out[m] = n
+		}
+	}
+	return out
 }

@@ -164,6 +164,21 @@ func TestTieIsAmbiguous(t *testing.T) {
 	}
 }
 
+// Time is recorded beside the score: seconds a question over the tasks that ran, output tokens a
+// second of the model's time, and each task's own time. A task the site didn't answer doesn't
+// count towards it.
+func TestFoldTime(t *testing.T) {
+	tasks := []Task{{ID: "a", Level: 1}, {ID: "b", Level: 2}}
+	passes := [][]TaskResult{
+		{{ID: "a", Level: 1, Status: StatusCorrect, WallMs: 60000, ModelMs: 50000, OutputTokens: 500, CellMs: 4000}, {ID: "b", Level: 2, Status: StatusWrong, WallMs: 120000, ModelMs: 100000, OutputTokens: 1000, CellMs: 6000}},
+		{{ID: "a", Level: 1, Status: StatusCorrect, WallMs: 90000, ModelMs: 50000, OutputTokens: 500}, {ID: "b", Level: 2, Status: StatusUnreachable, WallMs: 2000}},
+	}
+	s := Fold(tasks, passes)
+	if s.SecPerTask != 90 || s.TaskMs["a"] != 75000 || s.TaskMs["b"] != 120000 || s.OutputTPS != 10 || s.CellMs != 5000 {
+		t.Errorf("time: %.1f s a question, %v, %.1f tokens/s, %d ms in cells", s.SecPerTask, s.TaskMs, s.OutputTPS, s.CellMs)
+	}
+}
+
 func TestFoldAndFlips(t *testing.T) {
 	tasks := []Task{{ID: "a", Level: 1}, {ID: "b", Level: 3}, {ID: "c", Level: 2}}
 	pass := func(a, b, c string) []TaskResult {

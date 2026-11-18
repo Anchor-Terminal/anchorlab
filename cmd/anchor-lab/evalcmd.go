@@ -78,6 +78,7 @@ func evalCmd(args []string) error {
 	fmt.Printf("%s on %s, %d passes: Lab score %d; %d of %d right (%.1f%%), %d steady; by level %d/%d, %d/%d, %d/%d; %d calls to a tool it was told to leave alone; %d tokens and %.1f min in the model a pass\n",
 		s.Model, eval.Version, s.Runs, s.Points, s.Correct, s.Scored, s.Pct, s.Steady, s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3],
 		s.Forbidden, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
+	fmt.Printf("  time: %.0f s a question on average, %.1f output tokens a second, %.1f min in all\n", s.SecPerTask, s.OutputTPS, float64(s.WallMs)/60000)
 	if len(s.Wrong) > 0 {
 		fmt.Printf("  wrong: %s\n", strings.Join(s.Wrong, ", "))
 	}
@@ -157,10 +158,10 @@ func evalCompare(state string) error {
 		fmt.Println("no scores yet: anchor-lab eval -model <name>")
 		return nil
 	}
-	fmt.Printf("%-28s %5s %7s %6s %6s %8s %8s %8s %5s %10s %9s  %s\n", "model", "score", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "when")
+	fmt.Printf("%-28s %5s %7s %6s %6s %8s %8s %8s %5s %10s %9s %7s %6s  %s\n", "model", "score", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "s/q", "tok/s", "when")
 	for _, s := range scores {
-		fmt.Printf("%-28.28s %5d %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f  %s\n", s.Model, s.Points, s.Correct, s.Scored, s.Pct, s.Steady,
-			s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3], s.Runs, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.Ended.Format("2006-01-02 15:04"))
+		fmt.Printf("%-28.28s %5d %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f %7.0f %6.1f  %s\n", s.Model, s.Points, s.Correct, s.Scored, s.Pct, s.Steady,
+			s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3], s.Runs, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.SecPerTask, s.OutputTPS, s.Ended.Format("2006-01-02 15:04"))
 	}
 	if len(scores) > 1 {
 		fmt.Println("which tasks two of them disagree on: anchor-lab eval -flips <model>,<model>")

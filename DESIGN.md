@@ -249,6 +249,13 @@ small, they use the standard library only, and they treat everything above as da
   level 2 task counting twice and a level 3 task three times, out of the tasks scored, weighted the
   same way, so two models that both get every easy question right are told apart by the hard ones.
   Scores are ranked by it, and it's what the site shows on a model's listing.
+- **Time is part of the benchmark, as its own number.** Vlad, 18 November 2026: "we should record
+  everything and the time taken should be part of our benchmark", and asked whether time should
+  count inside the Lab score or beside it, beside it. A score carries the seconds a question takes
+  on average (from opening the server to the grade, over the tasks that ran), output tokens a
+  second of the model's time, the time in the cells, and each task's own time. The Lab score stays
+  what the model got right, so a fast wrong answer and a slow right one aren't folded into one
+  figure; the site shows both and lets a reader weigh them.
 - **Three passes, flips and a sample, as the bench.** A task is right when it's right in more than
   half the passes it was scored in. `-sample` runs ten tasks once and keeps nothing, for a quick
   look at a model before the hours the whole set takes. Scores stay on the box in `eval.ndjson`

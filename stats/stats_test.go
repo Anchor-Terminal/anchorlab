@@ -202,6 +202,24 @@ func TestListen(t *testing.T) {
 	ln.Close()
 }
 
+// An evaluation asked for through the inbox shows as running from its start to its end.
+func TestEvaluating(t *testing.T) {
+	c, _ := fixture(t)
+	day := filepath.Join(c.State, "events", "2026-11-17.ndjson")
+	f, _ := os.OpenFile(day, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"t":"2026-11-17T13:54:00Z","run":"","ev":"eval.start","model":"qwen3.8-27b"}` + "\n")
+	f.Close()
+	if s := Collect(c); s.Evaluating != "qwen3.8-27b" {
+		t.Errorf("evaluating: %q", s.Evaluating)
+	}
+	f, _ = os.OpenFile(day, os.O_APPEND|os.O_WRONLY, 0)
+	f.WriteString(`{"t":"2026-11-17T13:58:00Z","run":"","ev":"eval.end","model":"qwen3.8-27b","correct":40}` + "\n")
+	f.Close()
+	if s := Collect(c); s.Evaluating != "" {
+		t.Errorf("after the end: %q", s.Evaluating)
+	}
+}
+
 // A bench the harness is running for the inbox shows, and goes when it ends.
 func TestBenching(t *testing.T) {
 	c, _ := fixture(t)

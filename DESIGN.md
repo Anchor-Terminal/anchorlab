@@ -134,10 +134,13 @@ small, they use the standard library only, and they treat everything above as da
 - **Variants: the same model, one setting changed, on the same questions.** Vlad, 18 November 2026,
   on speculative decoding: "can we add benchmarks for speculative and non speculative and on
   different temperatuires? same model, different settings, same evals", and "can we add the 4b as
-  well as the 8?". A variant is a preset named `<model>:<what changed>` (`qwen3.8-27b:q4`,
-  `:mtp`, `:t0.6`), so llama-server serves it like a model and the evaluation, the bench and the
-  queue need nothing new; `:` is a character every name check already takes, and it reads as a
-  tag. models.txt lists every file a variant loads, the shared ones too, so its size is what it
+  well as the 8?". A variant is a preset named `<model>+<what changed>` (`qwen3.8-27b+q4`,
+  `+mtp`, `+t0.6`), so llama-server serves it like a model and the evaluation, the bench and the
+  queue need nothing new; `+` is a character every name check already takes. It was `:` for an
+  hour on 18 November 2026, until the variants showed up in the admin page as `qwen3.8-27b:6`,
+  `:DFLASH`, `:MTP` and `:Q4`: llama-server reads a preset name's part after a colon as a quant
+  tag, keeps its last `-` or `.` piece and capitalises it (`canonical_tag` in common/preset.cpp),
+  so seven variants came out as four names. `+` means nothing to it. models.txt lists every file a variant loads, the shared ones too, so its size is what it
   needs; `fetch.sh remove` keeps a file another model names, so removing a variant never takes its
   model's weights. The first set is qwen3.8-27b's: the 4-bit build, Qwen's MTP heads and the DFlash
   draft from the same ggml-org repository on each build, and temperature 0.6, because a dense model

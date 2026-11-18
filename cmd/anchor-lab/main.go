@@ -3,6 +3,7 @@
 //
 //	anchor-lab run       the harness: test each target in turn, for ever (or -once)
 //	anchor-lab bench     the known-answer cases: put a model through them and keep its score, or -compare
+//	anchor-lab eval      questions with one right answer about Anchor Terminal: evaluate a model, -compare, -check
 //	anchor-lab cell      one cell: build and run one program from standard input (systemd starts it)
 //	anchor-lab sync      what the site's server may ask over SSH: "export N" or "targets"
 //	anchor-lab stats     numbers about the lab over HTTP, for the site's admin page and nobody else
@@ -34,6 +35,7 @@ import (
 	"github.com/Anchor-Terminal/anchorlab/bench"
 	"github.com/Anchor-Terminal/anchorlab/brain"
 	"github.com/Anchor-Terminal/anchorlab/cell"
+	"github.com/Anchor-Terminal/anchorlab/eval"
 	"github.com/Anchor-Terminal/anchorlab/gateway"
 	"github.com/Anchor-Terminal/anchorlab/journal"
 	"github.com/Anchor-Terminal/anchorlab/seal"
@@ -45,7 +47,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | model | targets | retest | boxkey | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | cell | sync | stats | status | model | targets | retest | boxkey | version")
 		os.Exit(2)
 	}
 	var err error
@@ -54,6 +56,8 @@ func main() {
 		err = run(args)
 	case "bench":
 		err = benchCmd(args)
+	case "eval":
+		err = evalCmd(args)
 	case "cell":
 		// ANCHOR_LAB_GOCACHE shares a build cache between jobs. The unit never sets it.
 		err = cell.Serve(stdio{}, cell.ServeOptions{GoCache: os.Getenv("ANCHOR_LAB_GOCACHE")})
@@ -72,7 +76,7 @@ func main() {
 	case "boxkey":
 		err = boxKeyCmd(args, os.Stdout)
 	case "version":
-		fmt.Println("anchor-lab", version, "bench", bench.Version)
+		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version)
 	default:
 		err = fmt.Errorf("no command %q", cmd)
 	}
@@ -237,9 +241,10 @@ func run(args []string) error {
 			if *only != "" && t.Slug != *only {
 				continue
 			}
-			// benches and retests asked for since the last test, then the model as it stands now
+			// benches, evaluations and retests asked for since the last test, then the model as it stands now
 			if !*once && *only == "" {
 				benchQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
+				evalQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
 				retestQueued(f.Targets)
 			}
 			use(current())
@@ -258,6 +263,7 @@ func run(args []string) error {
 		}
 		if tested == 0 {
 			benchQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
+			evalQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
 			if err == nil {
 				retestQueued(f.Targets)
 			}

@@ -88,6 +88,16 @@ func TestCommands(t *testing.T) {
 	if m, _ := journal.BenchRequests(state); len(m) != 1 || m[0] != "gpt-oss-120b" {
 		t.Errorf("bench queue: %v", m)
 	}
+	ev := Command{V: CommandVersion, Do: "eval", Model: "qwen3.8-27b"}
+	if w := send(ev, good, now, site); w.Code != 200 {
+		t.Errorf("eval: %d %s", w.Code, w.Body)
+	}
+	if m, _ := journal.EvalRequests(state); len(m) != 1 || m[0] != "qwen3.8-27b" {
+		t.Errorf("eval queue: %v", m)
+	}
+	if w := send(Command{V: CommandVersion, Do: "eval", Model: "../x"}, good, now, site); w.Code == 200 {
+		t.Errorf("eval with a path: took it")
+	}
 	if w := send(Command{V: CommandVersion, Do: "retest", Model: "gemma-4-31b", Slugs: []string{"*"}}, good, now, site); w.Code != 200 {
 		t.Errorf("full test: %d %s", w.Code, w.Body)
 	}

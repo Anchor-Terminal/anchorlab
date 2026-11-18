@@ -41,7 +41,7 @@ var sdk []byte
 func SDK() string { return string(sdk) }
 
 const (
-	maxLine     = 2 << 20   // one protocol line
+	maxLine     = 16 << 20  // one protocol line: room for a 4 MB page from lab.fetch, escaped
 	maxSource   = 256 << 10 // a program
 	maxOutput   = 64 << 10  // stdout or stderr kept from a run
 	maxDiag     = 8 << 10   // compiler output kept

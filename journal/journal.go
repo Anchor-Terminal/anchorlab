@@ -293,8 +293,14 @@ func WriteInbox(state, name string, b []byte) error {
 // BenchRequests are the models waiting to be benched, from <state>/inbox/bench-*.request, oldest
 // first. `anchor-lab bench -model <name>` writes one when it can't run the bench itself, and the
 // harness runs it as its own user between tests.
-func BenchRequests(state string) (models []string, files []string) {
-	paths, _ := filepath.Glob(filepath.Join(state, "inbox", "bench-*.request"))
+func BenchRequests(state string) (models []string, files []string) { return modelRequests(state, "bench-") }
+
+// EvalRequests are the models waiting to be evaluated, from <state>/inbox/eval-*.request, oldest
+// first, the same way.
+func EvalRequests(state string) (models []string, files []string) { return modelRequests(state, "eval-") }
+
+func modelRequests(state, prefix string) (models []string, files []string) {
+	paths, _ := filepath.Glob(filepath.Join(state, "inbox", prefix+"*.request"))
 	type req struct {
 		path, model string
 		at          time.Time
@@ -411,8 +417,13 @@ func QueueRetest(state, model string, slugs []string) error {
 }
 
 // QueueBench asks the harness to bench a model: a bench request in the inbox.
-func QueueBench(state, model string) error {
-	name := "bench-" + strings.Map(func(r rune) rune {
+func QueueBench(state, model string) error { return queueModel(state, "bench-", model) }
+
+// QueueEval asks the harness to evaluate a model: an eval request in the inbox.
+func QueueEval(state, model string) error { return queueModel(state, "eval-", model) }
+
+func queueModel(state, prefix, model string) error {
+	name := prefix + strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
 			return r
 		}

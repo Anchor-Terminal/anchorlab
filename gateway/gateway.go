@@ -138,6 +138,7 @@ type Call struct {
 	Req    int
 	Resp   int
 	DryRun bool // a change tool, called in the dry run it declares
+	Cut    bool // the answer was longer than Limits.MaxText, and the program got the first part
 }
 
 // Reply is what the code gets back for a call.
@@ -560,7 +561,9 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 			fmt.Fprintf(&text, "[%s content left out]\n", clip(part.Type, 20))
 		}
 	}
-	r := Reply{OK: !out.IsError, Text: clip(strings.TrimSpace(text.String()), s.Limits.MaxText), Ms: c.Ms}
+	full := strings.TrimSpace(text.String())
+	c.Cut = len(full) > s.Limits.MaxText
+	r := Reply{OK: !out.IsError, Text: clip(full, s.Limits.MaxText), Ms: c.Ms}
 	if len(out.Structured) > 0 && len(out.Structured) <= s.Limits.MaxText {
 		r.Data = out.Structured
 	}

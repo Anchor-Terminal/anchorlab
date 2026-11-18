@@ -113,6 +113,23 @@ small, they use the standard library only, and they treat everything above as da
   one. It used to send 0.2 for every model, which overrode what every one of the eight publishers
   recommends (about 1.0) and is low enough to make a thinking model loop. Thinking is capped at
   2,048 tokens so a model that thinks still has room in a 4,096-token reply for the program.
+- **Thirty models, for the evaluation to rank.** Vlad, 18 November 2026: "We should run probably
+  around 30 models". The eight the calculator picked are seven now: Qwen3.6-27B went, since
+  Qwen3.8-27B replaced it at the same size, and Qwen3.8-27B runs at Q8_0, which fits with room to
+  spare. The other 23 are every open-weights listing whose GGUF fits (a file plus a fifth within 96
+  GB) and that's built for agents or tool calling, scored or not: the calculator can only rank the
+  ones a leaderboard has read, and our own evaluation is how the rest get a number. About 1.02 TB on
+  the box's 4 TB.
+- **A third party's 3-bit build where the publisher's won't fit.** Qwen3.8-Flash-Next scores 74
+  against the 122B's 62, and its smallest publisher GGUF is 103 GB. ISTA-DASLab's GSQ-RCO IQ3_XXS
+  is 75.8 GB and, by their card, matches the full model on AIME25. It's below the 4-bit line we
+  record elsewhere, which is why it's named as theirs; the evaluation says whether it holds up.
+- **Removing and swapping a model needs no sudo.** "A command to remove a model and switch to a new
+  one" (Vlad). `models/fetch.sh remove`, `swap` and `prune` work on the models folder as the user who
+  downloads, and switching is `anchor-lab model use`, a file in the inbox, as before. `remove`
+  refuses the model the lab uses; `swap` downloads and checks the new one before it switches or
+  deletes anything. Adding a model still needs its preset installed, `models/install.sh`, which is
+  installing.
 - **The model files are pinned.** `models/models.txt` has each file's size and SHA-256 as the Hub
   gave it, and `models/fetch.sh` refuses a file that doesn't match. A publisher replacing a file is
   something to look at, not something to pick up quietly.

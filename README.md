@@ -80,7 +80,7 @@ person to read.
 The box needs Debian or another systemd distribution, Go (the cells compile the programs with it),
 and a model served on the box itself in the OpenAI chat format. The harness refuses a model address
 that isn't the box: the prompts hold strangers' text. `MODELS.md` sets that up with llama.cpp: the
-GPU, the build, eight models, and one `llama-server` that loads whichever the harness asks for.
+GPU, the build, 30 models, and one `llama-server` that loads whichever the harness asks for.
 
 ## Building
 
@@ -287,7 +287,7 @@ changes the number of passes for a bench run by hand with `-here`.
 `anchor-lab bench` run by you, not the lab's own user, asks the lab to run it: a request in its
 inbox, run by the harness as itself after the test in progress, so its files are the lab's. It
 says so and returns; `anchor-lab status` shows it running and `bench -compare` has the score when
-it's done. `MODELS.md`, "Picking one", asks for all eight in one go.
+it's done. `MODELS.md`, "Picking one", asks for all 30 in one go.
 
 This repository has a sample set (`bench/set_sample.go`): ten tools on two servers, each kind of
 trouble at least once. The fifty Anchor Terminal picks its model with are kept private, because a

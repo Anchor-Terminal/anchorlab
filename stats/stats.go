@@ -54,8 +54,13 @@ type Stats struct {
 	Current    *Current  `json:"current,omitempty"`
 	Benching   string    `json:"benching,omitempty"`   // the model the harness is benching now, asked for through the inbox
 	Evaluating string    `json:"evaluating,omitempty"` // the model the harness is evaluating now (package eval)
-	Today      Today     `json:"today"`
-	Results    int       `json:"results"` // lines in results.ndjson
+	// Progress is how far the evaluation in progress has got, nil when there's none
+	Progress *Progress `json:"progress,omitempty"`
+	// Queue is what's waiting in the inbox, in the order the harness takes it: retests, then
+	// benches, then evaluations
+	Queue   []Queued `json:"queue"`
+	Today   Today    `json:"today"`
+	Results int      `json:"results"` // lines in results.ndjson
 	// Box is the box's public key, which the admin's browser seals a server's key to (package seal)
 	Box *Box `json:"box,omitempty"`
 	// Keys are the sealed keys waiting in the inbox: which listing, which box key, since when.
@@ -77,6 +82,31 @@ type Current struct {
 	Calls     int       `json:"calls"`
 	Errors    int       `json:"errors"`
 	LastEvent time.Time `json:"lastEvent"`
+}
+
+// Progress is the evaluation in progress, from the eval journal's events: which question of how
+// many, and how they came out so far.
+type Progress struct {
+	Model       string    `json:"model"`
+	Started     time.Time `json:"started"`
+	Pass        int       `json:"pass"`     // 1 to Passes
+	Passes      int       `json:"passes"`   // usually 3
+	Question    int       `json:"question"` // 1 to Of, in this pass
+	Of          int       `json:"of"`       // questions in a pass
+	Done        int       `json:"done"`     // questions finished, over every pass
+	Right       int       `json:"right"`
+	Wrong       int       `json:"wrong"`
+	Skipped     int       `json:"skipped"`
+	Unreachable int       `json:"unreachable"`
+	LastEvent   time.Time `json:"lastEvent"`
+}
+
+// Queued is one request waiting in the inbox. Kind is evaluate, bench or retest; Servers is how
+// many a retest names, 0 for every server.
+type Queued struct {
+	Kind    string `json:"kind"`
+	Model   string `json:"model"`
+	Servers int    `json:"servers,omitempty"`
 }
 
 // Today is the UTC day so far, from the events and the results.
@@ -205,7 +235,14 @@ func Collect(c Config) Stats {
 		s.Targets = len(f.Targets)
 	}
 	finished := results(c.State, t, &s)
+	busy(c.State, t.AddDate(0, 0, -1), &s) // an evaluation can start before midnight and run for hours after
 	events(c.State, t, &s, finished)
+	if s.Evaluating != "" {
+		if p := progress(c.State, t); p != nil && p.Model == s.Evaluating {
+			s.Progress = p
+		}
+	}
+	s.Queue = queue(c.State)
 	if s.Model == "" {
 		// with no model a run is connect only, so its connect result finishes it
 		for run := range finished.connected {
@@ -291,6 +328,10 @@ type event struct {
 	OutputTokens int64     `json:"outputTokens"`
 	Built        *bool     `json:"built"`
 	Model        string    `json:"model"`
+	Pass         int       `json:"pass"`
+	Passes       int       `json:"passes"`
+	N            int       `json:"n"`
+	Of           int       `json:"of"`
 }
 
 // events reads today's events file: the counts, the harness's start and the run in progress.
@@ -730,4 +771,115 @@ func Listen(addr string) (net.Listener, error) {
 		return nil, &net.AddrError{Err: "give the box's own address on the local network, not a name or every interface", Addr: addr}
 	}
 	return net.Listen("tcp", addr)
+}
+
+// busy reads one day's events for what the harness was busy with when the day ended: an
+// evaluation or a bench that started then and may not have ended yet.
+func busy(state string, day time.Time, s *Stats) {
+	f, err := os.Open(filepath.Join(state, "events", day.Format("2006-01-02")+".ndjson"))
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
+	for sc.Scan() {
+		var e event
+		if json.Unmarshal(sc.Bytes(), &e) != nil {
+			continue
+		}
+		switch e.Ev {
+		case "harness.start":
+			s.Benching, s.Evaluating = "", ""
+		case "eval.start":
+			if modelOK.MatchString(e.Model) {
+				s.Evaluating = e.Model
+			}
+		case "eval.end", "eval.failed":
+			s.Evaluating = ""
+		case "bench.start":
+			if modelOK.MatchString(e.Model) {
+				s.Benching = e.Model
+			}
+		case "bench.end", "bench.failed":
+			s.Benching = ""
+		}
+	}
+}
+
+// progress reads the eval journal's events, yesterday's then today's, for the latest evaluation:
+// it starts at the first question of the first pass, and each question's end counts.
+func progress(state string, t time.Time) *Progress {
+	var p *Progress
+	for _, day := range []time.Time{t.AddDate(0, 0, -1), t} {
+		f, err := os.Open(filepath.Join(state, "eval", "events", day.Format("2006-01-02")+".ndjson"))
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
+		for sc.Scan() {
+			var e event
+			if json.Unmarshal(sc.Bytes(), &e) != nil || e.T.IsZero() {
+				continue
+			}
+			switch e.Ev {
+			case "eval.task":
+				if !modelOK.MatchString(e.Model) || e.Passes < 1 || e.Passes > 10 || e.Of < 1 || e.Of > 1000 ||
+					e.Pass < 1 || e.Pass > e.Passes || e.N < 1 || e.N > e.Of {
+					continue
+				}
+				if p == nil || p.Model != e.Model || e.Pass == 1 && e.N == 1 {
+					p = &Progress{Model: e.Model, Started: e.T.UTC()}
+				}
+				p.Pass, p.Passes, p.Question, p.Of, p.LastEvent = e.Pass, e.Passes, e.N, e.Of, e.T.UTC()
+			case "eval.end":
+				if p == nil || e.Run == "" {
+					continue
+				}
+				p.Done++
+				p.LastEvent = e.T.UTC()
+				switch e.Status {
+				case "correct":
+					p.Right++
+				case "wrong":
+					p.Wrong++
+				case "skipped":
+					p.Skipped++
+				case "unreachable":
+					p.Unreachable++
+				}
+			}
+		}
+		f.Close()
+	}
+	return p
+}
+
+// queue is the requests waiting in the inbox, in the order the harness takes them.
+func queue(state string) []Queued {
+	q := []Queued{}
+	for _, r := range journal.RetestRequests(state) {
+		if !modelOK.MatchString(r.Model) {
+			continue
+		}
+		n := len(r.Slugs)
+		if n == 1 && r.Slugs[0] == "*" {
+			n = 0
+		}
+		q = append(q, Queued{Kind: "retest", Model: r.Model, Servers: n})
+	}
+	benches, _ := journal.BenchRequests(state)
+	for _, m := range benches {
+		if modelOK.MatchString(m) {
+			q = append(q, Queued{Kind: "bench", Model: m})
+		}
+	}
+	evals, _ := journal.EvalRequests(state)
+	for _, m := range evals {
+		if modelOK.MatchString(m) {
+			q = append(q, Queued{Kind: "evaluate", Model: m})
+		}
+	}
+	return q
 }

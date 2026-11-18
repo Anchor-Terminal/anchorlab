@@ -159,12 +159,37 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 			stage = fmt.Sprintf("exploring, turn %d", c.Turn)
 		}
 		fmt.Fprintf(w, "now      %s, %s, %s, started %s\n", c.Slug, stage, plural(c.Calls, "call")+" ("+plural(c.Errors, "error")+")", ago(now, c.Started))
+	} else if p := s.Progress; p != nil {
+		fmt.Fprintf(w, "now      evaluating %s, %s\n", p.Model, progressLine(*p, now))
 	} else if s.Evaluating != "" {
 		fmt.Fprintf(w, "now      evaluating %s (anchor-lab eval -compare once it's done; each question as it goes: tail -f the eval/events folder)\n", s.Evaluating)
 	} else if s.Benching != "" {
 		fmt.Fprintf(w, "now      benching %s (anchor-lab bench -compare once it's done)\n", s.Benching)
 	} else {
 		fmt.Fprintf(w, "now      idle\n")
+	}
+
+	if c := s.Current; c != nil && s.Progress != nil {
+		// a tool test runs between two questions only if something's wrong; say both
+		fmt.Fprintf(w, "         evaluating %s, %s\n", s.Progress.Model, progressLine(*s.Progress, now))
+	}
+	if len(s.Queue) > 0 {
+		var q []string
+		for _, r := range s.Queue {
+			switch r.Kind {
+			case "retest":
+				if r.Servers == 0 {
+					q = append(q, "a full test with "+r.Model)
+				} else {
+					q = append(q, plural(r.Servers, "server")+" with "+r.Model)
+				}
+			case "bench":
+				q = append(q, "bench "+r.Model)
+			default:
+				q = append(q, "evaluate "+r.Model)
+			}
+		}
+		fmt.Fprintf(w, "waiting  %s\n", strings.Join(q, " · "))
 	}
 
 	d := s.Today
@@ -277,4 +302,15 @@ func ago(now, t time.Time) string {
 		d = 0
 	}
 	return dur(d.Milliseconds()) + " ago"
+}
+
+// progressLine is how far an evaluation has got and when it should end, at the pace so far.
+func progressLine(p stats.Progress, now time.Time) string {
+	total := p.Passes * p.Of
+	line := fmt.Sprintf("question %d of %d in pass %d of %d · %d of %d done, %d right so far", p.Question, p.Of, p.Pass, p.Passes, p.Done, total, p.Right)
+	if p.Done > 0 && total > p.Done {
+		each := now.Sub(p.Started) / time.Duration(p.Done)
+		line += fmt.Sprintf(" · about %s a question, done around %s", each.Round(time.Second), now.Add(each*time.Duration(total-p.Done)).Local().Format("Mon 15:04"))
+	}
+	return line
 }

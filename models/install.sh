@@ -20,6 +20,13 @@ case "$MODELS" in /*) ;; *) echo "MODELS must be a full path"; exit 1 ;; esac
 
 id llama >/dev/null 2>&1 || useradd --system --user-group --no-create-home --home-dir /nonexistent --shell /usr/sbin/nologin llama
 for g in render video; do getent group "$g" >/dev/null && usermod -a -G "$g" llama; done
+# whoever ran this with sudo reads llama-server's log without it, through Debian's systemd-journal
+# group, which reads the journal and changes nothing (install.sh does the same)
+reader=""
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && id "$SUDO_USER" >/dev/null 2>&1 && getent group systemd-journal >/dev/null; then
+    id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx systemd-journal || reader="$SUDO_USER"
+    usermod -a -G systemd-journal "$SUDO_USER"
+fi
 
 install -d -o root -g llama -m 0750 /etc/llama
 presets="$here/presets.ini"
@@ -41,3 +48,4 @@ while read -r path; do [ -f "$path" ] || missing="$missing $(basename "$path")";
 [ -z "$missing" ] || echo "  not downloaded yet:$missing (models/fetch.sh)"
 echo "  the list: curl -s http://127.0.0.1:8080/models"
 echo "  follow it: journalctl -u llama-server -f"
+[ -z "$reader" ] || echo "  added $reader to the systemd-journal group: log in again, and that needs no sudo"

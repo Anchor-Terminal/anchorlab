@@ -19,10 +19,15 @@ id labsync >/dev/null 2>&1 || useradd --system --create-home --home-dir /var/lib
 usermod -a -G anchorlab labsync
 # whoever ran this with sudo runs the lab from now on without it: reading the state, switching the
 # model and asking for a bench all go through what the anchorlab group may read and write
+# and reading the logs (journalctl -u anchor-lab, the cells', llama-server's) goes through Debian's
+# systemd-journal group, which reads the journal and changes nothing
 operator=""
 if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] && id "$SUDO_USER" >/dev/null 2>&1; then
-    id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx anchorlab || operator="$SUDO_USER"
-    usermod -a -G anchorlab "$SUDO_USER"
+    for g in anchorlab systemd-journal; do
+        getent group "$g" >/dev/null || continue
+        id -nG "$SUDO_USER" | tr ' ' '\n' | grep -qx "$g" || operator="$SUDO_USER"
+        usermod -a -G "$g" "$SUDO_USER"
+    done
 fi
 
 install -o root -g root -m 0755 "$here/anchor-lab" /usr/local/bin/anchor-lab.new
@@ -104,7 +109,7 @@ echo "  follow it:   tail -f /var/lib/anchor-lab/events/\$(date -u +%F).ndjson  
 echo "  how it goes: anchor-lab status   (no sudo once you're in the anchorlab group)"
 echo "  the box's key: $(/usr/local/bin/anchor-lab boxkey -key /etc/anchor-lab/box.key -pub /etc/anchor-lab/box.pub | sed 's/.*: //')"
 echo "    the admin page's Lab tab shows the same fingerprint beside \"Keys we hold\": check they match"
-[ -z "$operator" ] || echo "  added $operator to the anchorlab group: log in again, and the lab needs no sudo from then on"
+[ -z "$operator" ] || echo "  added $operator to the anchorlab and systemd-journal groups: log in again, and the lab and its logs need no sudo from then on"
 echo
 echo "Still to do by hand, once (README.md has each line):"
 echo "  1. a model: anchor-lab model use <name> (MODELS.md has the names)"

@@ -10,7 +10,9 @@ package stats
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -24,6 +26,7 @@ import (
 	"time"
 
 	"github.com/Anchor-Terminal/anchorlab/journal"
+	"github.com/Anchor-Terminal/anchorlab/seal"
 	"github.com/Anchor-Terminal/anchorlab/targets"
 )
 
@@ -52,8 +55,15 @@ type Stats struct {
 	Benching  string    `json:"benching,omitempty"` // the model the harness is benching now, asked for through the inbox
 	Today     Today     `json:"today"`
 	Results   int       `json:"results"` // lines in results.ndjson
-	Recent    []Result  `json:"recent"`
-	System    System    `json:"system"`
+	// Box is the box's public key, which the admin's browser seals a server's key to (package seal)
+	Box *Box `json:"box,omitempty"`
+	// Keys are the sealed keys waiting in the inbox: which listing, which box key, since when.
+	// Never the key: this service can't open them.
+	Keys []KeyHeld `json:"keys"`
+	// Models are what the model server offers, for the site's model picker
+	Models []string `json:"models,omitempty"`
+	Recent []Result `json:"recent"`
+	System System   `json:"system"`
 }
 
 // Current is the run in progress.
@@ -145,6 +155,7 @@ type Config struct {
 	Model    string   // ANCHOR_LAB_MODEL
 	ModelURL string   // ANCHOR_LAB_MODEL_URL; /health beside it is asked, on this machine only
 	Harness  string   // this binary's version
+	BoxPub   string   // the box's public key, /etc/anchor-lab/box.pub: root's to write; "" is <State>/box.pub
 	Root     string   // "" in use; a folder standing in for / in tests (proc, sys)
 	Now      func() time.Time
 }
@@ -207,6 +218,10 @@ func Collect(c Config) Stats {
 	if s.Model != "" {
 		up := modelUp(c.ModelURL)
 		s.ModelUp = &up
+	}
+	s.Box, s.Keys = boxKey(c), keysHeld(c.State)
+	if c.Root == "" { // not in tests, which have no model server
+		s.Models = modelList(c.ModelURL)
 	}
 	return s
 }
@@ -457,6 +472,101 @@ func hwmon(root, name, file string) float64 {
 	return 0
 }
 
+// Box is the box's public key and its fingerprint.
+type Box struct {
+	Key         string `json:"key"` // uncompressed P-256, base64url
+	Fingerprint string `json:"fingerprint"`
+}
+
+// KeyHeld is one sealed key in the inbox.
+type KeyHeld struct {
+	Slug  string    `json:"slug"`
+	Box   string    `json:"box"` // the fingerprint it was sealed to
+	Added time.Time `json:"added"`
+}
+
+func boxKey(c Config) *Box {
+	p := c.BoxPub
+	if p == "" {
+		p = filepath.Join(c.State, "box.pub")
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	k, err := seal.ParsePublicKey(string(b))
+	if err != nil {
+		return nil
+	}
+	return &Box{Key: seal.PublicKey(k), Fingerprint: seal.Fingerprint(k)}
+}
+
+func keysHeld(state string) []KeyHeld {
+	out := []KeyHeld{}
+	paths, _ := filepath.Glob(filepath.Join(state, "inbox", "keys", "*.json"))
+	for _, p := range paths {
+		slug := strings.TrimSuffix(filepath.Base(p), ".json")
+		fi, err := os.Stat(p)
+		b, err2 := os.ReadFile(p)
+		var x seal.Sealed
+		if err != nil || err2 != nil || !slugOK.MatchString(slug) || json.Unmarshal(b, &x) != nil || x.Slug != slug || x.Check() != nil {
+			continue
+		}
+		out = append(out, KeyHeld{Slug: slug, Box: x.Box, Added: fi.ModTime().UTC()})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Slug < out[j].Slug })
+	return out
+}
+
+// modelList is the models the model server offers, on this machine only; nil when it can't say.
+func modelList(base string) []string {
+	if base == "" {
+		base = "http://127.0.0.1:8080/v1"
+	}
+	if !local(base) {
+		return nil
+	}
+	cl := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{Proxy: nil}, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	resp, err := cl.Get(strings.TrimSuffix(base, "/") + "/models")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if resp.StatusCode != 200 || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&list) != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range list.Data {
+		if modelOK.MatchString(m.ID) && len(out) < 64 {
+			out = append(out, m.ID)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// local says whether an address is on this machine.
+func local(u string) bool {
+	host := u
+	if i := strings.Index(host, "://"); i >= 0 {
+		host = host[i+3:]
+	}
+	if i := strings.IndexAny(host, "/"); i >= 0 {
+		host = host[:i]
+	}
+	h, _, err := net.SplitHostPort(host)
+	if err != nil {
+		h = host
+	}
+	ip := net.ParseIP(h)
+	return h == "localhost" || (ip != nil && ip.IsLoopback())
+}
+
 // modelUp asks the model's server for /health, on this machine only.
 func modelUp(base string) bool {
 	if base == "" {
@@ -492,10 +602,21 @@ type Server struct {
 	Config Config
 	Allow  []net.IP
 	Fresh  time.Duration
+	// Secret signs the site's commands (control.go); shorter than 32 bytes, commands are off
+	Secret []byte
 
-	mu   sync.Mutex
-	last []byte
-	at   time.Time
+	mu      sync.Mutex
+	last    []byte
+	at      time.Time
+	replays seen
+}
+
+// boxFingerprint is the fingerprint of the box's public key, "" when install.sh hasn't made it.
+func (sv *Server) boxFingerprint() string {
+	if b := boxKey(sv.Config); b != nil {
+		return b.Fingerprint
+	}
+	return ""
 }
 
 func (sv *Server) allowed(remote string) bool {
@@ -517,6 +638,15 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no", http.StatusForbidden)
 		return
 	}
+	if r.URL.Path == "/v1/command" {
+		if r.Method != http.MethodPost {
+			w.Header().Set("Allow", "POST")
+			http.Error(w, "POST", http.StatusMethodNotAllowed)
+			return
+		}
+		sv.command(w, r)
+		return
+	}
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
 		http.Error(w, "GET", http.StatusMethodNotAllowed)
@@ -526,6 +656,9 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "/v1/stats":
 	case "/v1/results":
 		sv.results(w, r)
+		return
+	case "/v1/run":
+		sv.transcript(w, r)
 		return
 	default:
 		http.NotFound(w, r)
@@ -546,6 +679,7 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	sv.signAnswer(w, "/v1/stats", b)
 	w.Write(b)
 }
 
@@ -562,10 +696,16 @@ func (sv *Server) results(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "after: a line number", http.StatusBadRequest)
 		return
 	}
+	var buf bytes.Buffer
+	if err := journal.Export(sv.Config.State, after, ResultsPage, &buf); err != nil {
+		http.Error(w, "results", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	journal.Export(sv.Config.State, after, ResultsPage, w)
+	sv.signAnswer(w, "/v1/results", buf.Bytes())
+	w.Write(buf.Bytes())
 }
 
 // Listen checks the address it's given: a real address of this machine, never every interface,

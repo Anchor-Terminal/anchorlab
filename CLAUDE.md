@@ -14,8 +14,13 @@ private bench set.
 - The formats are contracts with the site: `anchor-lab-result/1` (`journal/journal.go`),
   `anchor-lab-stats/1` (`stats/stats.go`), `anchor-lab-targets/1` (`targets/targets.go`). A change
   to what a field means is a new version, and the site's side changes in the same breath.
-- What leaves the box is numbers and words from fixed lists. A field that would carry a tool's
-  description, an error message or a model's words doesn't go in a result or the stats.
+- What leaves the box in a result or the stats is numbers and words from fixed lists. A field that
+  would carry a tool's description, an error message or a model's words doesn't go in either. The
+  one exception is a run's transcript, sent signed to the site on request for an admin to read,
+  and kept nowhere off the box.
+- A key we're given for a server is sealed to the box (`seal/`) and opened only by the harness.
+  Never write one in plain text in a file, a log, a test fixture or a command, and never let the
+  model, a program or a result see it.
 - Every change goes on its own branch, `claude/<short-slug>`, and lands through a pull request that
   Vlad or Quynh merges. Never push to main. Base every pull request on main, never on another
   pull request's branch: a stacked one merged after its base goes into a branch that's deleted,

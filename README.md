@@ -12,7 +12,8 @@ is how to build it, install it and run it.
 It's early. The tests pass and the systemd units pass `systemd-analyze verify`, but the units
 haven't had their first run on real hardware yet. The tasks so far are `connect` (open the server
 and list its tools) and `explore` (can a model, given only what the server says about its tools,
-get each one to answer?). Hosted MCP servers only, and only ones that need no key.
+get each one to answer?). Hosted MCP servers only: the ones that need no key, and the ones we've
+been given a key for (Keys, below).
 
 Go, standard library only. MIT licence.
 
@@ -98,8 +99,9 @@ Building elsewhere and copying the binary over works too.
 
 The lab tests the tools Anchor Terminal lists, and takes the list from Anchor Terminal's public
 API, the same `/api/v1/tools.json` anyone can read: every listing whose hosted MCP server answered
-the site's own probe without a key (111 on 17 November 2026). Those need no account, so the lab
-tests them with no credentials at all.
+the site's own probe without a key (111 on 17 November 2026). Those list their tools without an
+account; some then want a key to run them, and a key we're given for one is sealed to the box
+(Keys, below).
 
 ```
 ./anchor-lab targets > targets.json                   # from https://www.anchorterminal.com/api/v1/tools.json
@@ -186,6 +188,43 @@ latest (38 kept on the box)
 
 `ANCHOR_LAB_STATS_URL` set to the box's address saves typing `-from` each time. `tail -f` on
 today's events file is the raw view of the same thing.
+
+## Keys
+
+Some servers list their tools to anyone and run them for no one without an account. Their result
+says `auth`, and the site's admin page lists them with what to ask for. A key we're given never
+sits anywhere it can be read but this box:
+
+- `install.sh` makes the box a key pair once (`anchor-lab boxkey`). The private half is
+  `/etc/anchor-lab/box.key`, root's alone, which systemd hands to the harness's service and nothing
+  else (`LoadCredential`). The public half is `/etc/anchor-lab/box.pub`, and the stats give it out.
+- The admin page fetches the public half and the admin's browser seals the key and how it's sent
+  (a header, a query parameter, or an OAuth client's id and secret) to it, bound to the listing and
+  its server's address (`seal/`). The site keeps only the sealed copy and the last four characters.
+- The site sends the sealed copy to the box as a signed command, and it waits in
+  `inbox/keys/<slug>.json`. The service that takes commands can't open it. The harness opens it
+  when it tests that listing, and the gateway sends it to that one server and nowhere else. The
+  model and the program never see it, and if the server sends it back it's blanked out first.
+
+A result made with a key says so (`"key": true`).
+
+## Commands from the site
+
+The site's admin page drives the lab with signed commands to `POST /v1/command` on the stats
+service: store or delete a sealed key, test servers again (some, the failures, or all) with a
+model, bench a model, switch the model. Each is HMAC-SHA256 over the version, the time and the
+body, with the secret in `/etc/anchor-lab/control.secret` (made by `install.sh`, root's alone,
+handed to the stats service by systemd). The site needs the same secret as
+`ANCHOR_LAB_CONTROL_SECRET`. A command more than a minute old, or sent twice, is refused, and each
+one only writes a file in the inbox, which the harness acts on as itself. Without the secret,
+commands are off and the stats answer as before.
+
+With the secret set, the box signs its answers too (the stats, the results, a transcript), so the
+site knows they came from the box: the stats carry the box's public key, which keys are sealed to.
+
+`GET /v1/run?id=<run>`, signed the same way, answers with a run's transcript: the tool list, each
+program, what it printed, the model's replies and the events. The site shows it to an admin and
+keeps none of it.
 
 ## The admin page's numbers
 

@@ -48,7 +48,11 @@ type Options struct {
 	// Open connects to a server: gateway.Open when nil. The bench gives its own, which answers
 	// from servers in this process.
 	Open func(ctx context.Context, url, userAgent string, lim gateway.Limits) (*gateway.Session, []gateway.Tool, error)
-	now  func() time.Time
+	// Key is the key we were given for a server, opened by the box (package seal), or nil for
+	// none. Its error is written down as one of a few fixed words, and the server is tested without
+	// a key. Never used with Open, which is the bench's.
+	Key func(ctx context.Context, t targets.Target) (*gateway.Credential, error)
+	now func() time.Time
 }
 
 // Run tests one target and returns its results: connect always, explore when the server opened,
@@ -67,6 +71,19 @@ func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
 	open := o.Open
 	if open == nil {
 		open = gateway.Open
+		if o.Key != nil {
+			cred, err := o.Key(ctx, t)
+			switch {
+			case err != nil:
+				j.Event(run, "key.refused", map[string]any{"why": err.Error()})
+			case cred != nil:
+				j.Event(run, "key.used", map[string]any{"kind": map[bool]string{true: "header", false: "query"}[cred.Header != ""]})
+				base.Key = true
+				open = func(ctx context.Context, url, ua string, lim gateway.Limits) (*gateway.Session, []gateway.Tool, error) {
+					return gateway.OpenWithKey(ctx, url, ua, lim, cred)
+				}
+			}
+		}
 	}
 	sess, tools, err := open(ctx, t.URL, o.UserAgent, o.Limits)
 	connect := base

@@ -17,6 +17,9 @@ ExecStart=/usr/local/bin/anchor-lab run -state /var/lib/anchor-lab -model "${ANC
 Environment=ANCHOR_LAB_MODEL= ANCHOR_LAB_MODEL_URL=http://127.0.0.1:8080/v1 ANCHOR_LAB_TEMPERATURE=
 Restart=on-failure
 RestartSec=30
+# the box's private key, for opening the keys we were given (package seal): root's file, copied
+# for this service alone into a folder only it can read
+LoadCredential=box.key:/etc/anchor-lab/box.key
 
 StateDirectory=anchor-lab
 StateDirectoryMode=0750

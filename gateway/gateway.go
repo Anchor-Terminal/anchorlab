@@ -122,6 +122,9 @@ type Session struct {
 	ua        string
 	sessionID string
 	id        int
+	reqURL    string      // URL, with a key in its query when the key goes there
+	cred      *Credential // a key we were given for this server, nil for none
+	secrets   [][]byte    // the key in the forms it might come back in, blanked from every answer
 
 	mu    sync.Mutex
 	last  time.Time
@@ -248,17 +251,110 @@ func CheckURL(raw string) error {
 
 // Open connects to the MCP server at rawURL (Streamable HTTP), initialises and lists its tools.
 func Open(ctx context.Context, rawURL, userAgent string, lim Limits) (*Session, []Tool, error) {
-	return OpenWith(ctx, rawURL, userAgent, lim, NewClient(lim.CallTimeout))
+	return open(ctx, rawURL, userAgent, lim, NewClient(lim.CallTimeout), nil)
+}
+
+// Credential is a key we were given for one server, opened by the box from a sealed copy (package
+// seal). The gateway sets it on every request to that server, and only that server: the session
+// has one address, redirects aren't followed, and the key never goes in a call's arguments, a
+// program's input or anything the model reads. If the server sends it back, it's blanked out of
+// the answer before the program sees it.
+type Credential struct {
+	Header string // the header it goes in, with Value the whole value (a prefix such as "Bearer " included)
+	Query  string // or the query parameter it goes in
+	Value  string
+}
+
+// OpenWithKey is Open with a key for this server.
+func OpenWithKey(ctx context.Context, rawURL, userAgent string, lim Limits, cred *Credential) (*Session, []Tool, error) {
+	if cred == nil || cred.Value == "" || (cred.Header == "") == (cred.Query == "") {
+		return nil, nil, &ErrStatus{"refused", "a key goes in one header or one query parameter"}
+	}
+	return open(ctx, rawURL, userAgent, lim, NewClient(lim.CallTimeout), cred)
+}
+
+// ClientToken swaps an OAuth client's id and secret for a token at tokenURL (client credentials),
+// over the same client and address check as every call, for a server that wants a token rather
+// than a key. The token is sent as Authorization: Bearer.
+func ClientToken(ctx context.Context, tokenURL, clientID, clientSecret, scope, userAgent string, lim Limits) (*Credential, error) {
+	if err := CheckURL(tokenURL); err != nil {
+		return nil, err
+	}
+	form := url.Values{"grant_type": {"client_credentials"}}
+	if scope != "" {
+		form.Set("scope", scope)
+	}
+	ctx, cancel := context.WithTimeout(ctx, lim.CallTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "POST", tokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", userAgent)
+	req.SetBasicAuth(url.QueryEscape(clientID), url.QueryEscape(clientSecret))
+	resp, err := NewClient(lim.CallTimeout).Do(req)
+	if err != nil {
+		return nil, errors.New("the token address didn't answer")
+	}
+	defer resp.Body.Close()
+	var tok struct {
+		AccessToken string `json:"access_token"`
+		TokenType   string `json:"token_type"`
+	}
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode != 200 || json.Unmarshal(b, &tok) != nil || tok.AccessToken == "" || len(tok.AccessToken) > 8192 || !printable(tok.AccessToken) {
+		return nil, fmt.Errorf("the token address answered HTTP %d without a token", resp.StatusCode)
+	}
+	if tok.TokenType != "" && !strings.EqualFold(tok.TokenType, "bearer") {
+		return nil, errors.New("the token isn't a bearer token")
+	}
+	return &Credential{Header: "Authorization", Value: "Bearer " + tok.AccessToken}, nil
+}
+
+// redact blanks the key out of what a server sent, in the forms it's likely to come back in.
+func (s *Session) redact(b []byte) []byte {
+	for _, k := range s.secrets {
+		if len(k) >= 4 && bytes.Contains(b, k) {
+			b = bytes.ReplaceAll(b, k, []byte("[key]"))
+		}
+	}
+	return b
 }
 
 // OpenWith is Open over a client of the caller's. Only the bench may use it, with a client that
 // answers from its own servers in this process (lab/bench): any other client would skip the
 // address check NewClient makes. TestOpenWithOnlyInBench holds the module to that.
 func OpenWith(ctx context.Context, rawURL, userAgent string, lim Limits, client *http.Client) (*Session, []Tool, error) {
+	return open(ctx, rawURL, userAgent, lim, client, nil)
+}
+
+func open(ctx context.Context, rawURL, userAgent string, lim Limits, client *http.Client, cred *Credential) (*Session, []Tool, error) {
 	if err := CheckURL(rawURL); err != nil {
 		return nil, nil, &ErrStatus{"refused", err.Error()}
 	}
-	s := &Session{URL: rawURL, Limits: lim, client: client, ua: userAgent, tools: map[string]Tool{}}
+	s := &Session{URL: rawURL, reqURL: rawURL, Limits: lim, client: client, ua: userAgent, tools: map[string]Tool{}, cred: cred}
+	if cred != nil {
+		raw := cred.Value
+		if cred.Query != "" {
+			u, _ := url.Parse(rawURL)
+			q := u.Query()
+			q.Set(cred.Query, cred.Value)
+			u.RawQuery = q.Encode()
+			s.reqURL = u.String()
+		}
+		// the whole value, the part after a prefix such as "Bearer ", and both as JSON and an
+		// address would write them
+		forms := []string{raw}
+		if _, after, ok := strings.Cut(raw, " "); ok {
+			forms = append(forms, after)
+		}
+		for _, f := range forms {
+			j, _ := json.Marshal(f)
+			s.secrets = append(s.secrets, []byte(f), j[1:len(j)-1], []byte(url.QueryEscape(f)))
+		}
+	}
 	start := time.Now()
 	res, _, err := s.rpc(ctx, "initialize", map[string]any{
 		"protocolVersion": "2025-06-18", "capabilities": map[string]any{},
@@ -319,7 +415,7 @@ func (s *Session) Close() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if req, err := http.NewRequestWithContext(ctx, "DELETE", s.URL, nil); err == nil {
+	if req, err := http.NewRequestWithContext(ctx, "DELETE", s.reqURL, nil); err == nil {
 		s.headers(req)
 		if resp, err := s.client.Do(req); err == nil {
 			resp.Body.Close()
@@ -456,12 +552,15 @@ func (s *Session) headers(req *http.Request) {
 	if s.sessionID != "" {
 		req.Header.Set("Mcp-Session-Id", s.sessionID)
 	}
+	if s.cred != nil && s.cred.Header != "" {
+		req.Header.Set(s.cred.Header, s.cred.Value)
+	}
 }
 
 func (s *Session) notify(ctx context.Context, method string) {
 	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "method": method})
 	s.wait()
-	req, err := http.NewRequestWithContext(ctx, "POST", s.URL, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, "POST", s.reqURL, bytes.NewReader(b))
 	if err != nil {
 		return
 	}
@@ -499,7 +598,7 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 	s.wait()
 	ctx, cancel := context.WithTimeout(ctx, s.Limits.CallTimeout)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, "POST", s.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", s.reqURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, rpcMeta{}, &ErrStatus{"refused", err.Error()}
 	}
@@ -513,7 +612,8 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 		case errors.Is(err, context.DeadlineExceeded) || isTimeout(err):
 			return nil, rpcMeta{}, &ErrStatus{"timeout", "no answer in " + s.Limits.CallTimeout.String()}
 		}
-		return nil, rpcMeta{}, &ErrStatus{"unreachable", clip(err.Error(), 300)}
+		// a transport error can quote the address, and with it a key in the query
+		return nil, rpcMeta{}, &ErrStatus{"unreachable", clip(string(s.redact([]byte(err.Error()))), 300)}
 	}
 	defer resp.Body.Close()
 	meta := rpcMeta{http: resp.StatusCode}
@@ -522,6 +622,7 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, s.Limits.MaxBody+1))
 	meta.bytes = len(raw)
+	raw = s.redact(raw)
 	if int64(len(raw)) > s.Limits.MaxBody {
 		return nil, meta, &ErrStatus{"too_big", fmt.Sprintf("the answer is over %d bytes", s.Limits.MaxBody)}
 	}

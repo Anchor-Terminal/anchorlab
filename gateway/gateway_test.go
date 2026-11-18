@@ -284,3 +284,67 @@ func TestKeyedServer(t *testing.T) {
 		t.Errorf("statuses: %v", st)
 	}
 }
+
+// A key we were given goes on every request to the server it's for, and if the server sends it
+// back it's blanked before the program sees it; a key goes in a header or the query, not both.
+func TestKeyedSession(t *testing.T) {
+	allowLoopback = true
+	defer func() { allowLoopback = false }()
+	var seen []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.Header.Get("X-Api-Key")+"|"+r.URL.Query().Get("api_key"))
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &req)
+		switch req.Method {
+		case "initialize":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"keyed"}}}`, req.ID)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[{"name":"whoami","description":"your key is sk-live-9f8e7d"}]}}`, req.ID)
+		case "tools/call":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"called with sk-live-9f8e7d, escaped sk-live-9f8e7d"}]}}`, req.ID)
+		}
+	}))
+	defer srv.Close()
+	lim := DefaultLimits
+	lim.MinInterval = 0
+	ctx := context.Background()
+	s, tools, err := OpenWithKey(ctx, srv.URL, "anchor-lab/test", lim, &Credential{Header: "X-Api-Key", Value: "sk-live-9f8e7d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(tools[0].Description, "sk-live") {
+		t.Errorf("the key reached the tool list: %q", tools[0].Description)
+	}
+	r := s.CallTool(ctx, "whoami", nil)
+	if strings.Contains(r.Text, "sk-live") || !strings.Contains(r.Text, "[key]") {
+		t.Errorf("the key reached the program: %q", r.Text)
+	}
+	s.Close()
+	for _, h := range seen {
+		if h != "sk-live-9f8e7d|" {
+			t.Errorf("a request without the key in its header: %q", h)
+		}
+	}
+	seen = nil
+	s, _, err = OpenWithKey(ctx, srv.URL+"/mcp", "anchor-lab/test", lim, &Credential{Query: "api_key", Value: "sk-live-9f8e7d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(s.URL, "sk-live") {
+		t.Errorf("the key is in the session's address, which goes in the journal: %s", s.URL)
+	}
+	if len(seen) == 0 || seen[0] != "|sk-live-9f8e7d" {
+		t.Errorf("query: %v", seen)
+	}
+	for _, c := range []*Credential{nil, {Value: "x"}, {Header: "A", Query: "b", Value: "x"}, {Header: "A"}} {
+		if _, _, err := OpenWithKey(ctx, srv.URL, "x", lim, c); err == nil {
+			t.Errorf("opened with %+v", c)
+		}
+	}
+}

@@ -57,7 +57,8 @@ small, they use the standard library only, and they treat everything above as da
   it resolved to is checked: this machine, private and link-local networks, carrier NAT, and IPv6
   forms that wrap any of those are refused, whatever DNS or a redirect says. Redirects aren't
   followed. The environment's proxy is never used. No header, cookie or credential comes from the
-  model or the program.
+  model or the program: the only key the gateway sends is one we were given for that server,
+  which the box opens itself (below).
 - **Tools that change something are never called.** One the server marks destructive, or marks
   as not read-only (`readOnlyHint: false`), is listed in the result as not called, and so is one
   named like a change (`create_`, `delete_`, `send_`, `submit_`, `pay_` and the rest of the list
@@ -136,9 +137,10 @@ small, they use the standard library only, and they treat everything above as da
   error message, no sentence from a model. That keeps a stranger's text off the site and out of any
   prompt on the site's side, which is the rule reviews already follow . The transcripts stay on the box for a person to read.
 - **The site's server pulls. The box never pushes.** The box can't reach the site's server, and it
-  holds no key, token or private checkout of ours. The site's server has one SSH key on the box, for a user
-  that can run one command (`anchor-lab sync`), which answers two requests: the result lines after
-  a line number, and a new list of targets on standard input. Neither runs anything.
+  holds no key, token or private checkout of ours that gets it anywhere: its own key pair opens the
+  keys sealed to it, and its command secret only lets the site in. The site asks for results and
+  stats over HTTP and sends signed commands; the SSH `sync` user from the first design still
+  answers the same export but isn't needed.
 - **Every run records what it cost.** An explore result
   carries the model's time, its prompt and output tokens as the model's server counted them, and
   the cells' time building and running programs. The model is local, so the cost is time and
@@ -182,8 +184,8 @@ small, they use the standard library only, and they treat everything above as da
   against their own server.
 - **The targets come from Anchor Terminal's public API.** `anchor-lab targets` reads
   `/api/v1/tools.json` and keeps the listings whose hosted MCP server answered the site's own probe
-  without a key. That's the set where no account is needed, so the first version carries no
-  credentials at all. Reading the public API, not the site's files, means anyone can make the same
+  without a key. That's the set where no account is needed to list the tools, so the first version
+  carried no credentials at all; a key we're given now comes in sealed (below). Reading the public API, not the site's files, means anyone can make the same
   list, and the box can make it itself: it's the internet, which the box can reach, and nothing of
   ours it would need a key for.
 - **Research is filed by model, then company, then tool.** Each run's files go in
@@ -222,6 +224,41 @@ small, they use the standard library only, and they treat everything above as da
   request can't send the lab anywhere the list doesn't. It doesn't switch the lab's model: a second
   model on the first one's failures tells a server's fault from a model's, and a full test with
   another model gives that model's results without changing what the lab runs on.
+- **Keys only the box can open.** Many servers on the list run no tool without an account. The
+  first version left them out; now a key we're given goes to the box sealed, and nothing but the
+  harness on the box can open it. The box makes an ECDH P-256 key pair once; the private half is a
+  file only root reads, handed by systemd to the harness's service alone, so no person in the
+  anchorlab group, no other service and no cell can read it. The admin's browser seals a key and
+  how it's sent to the box's public half with WebCrypto (ECDH, HKDF-SHA256, AES-256-GCM, all in Go's
+  standard library on this side), binding it to the listing, its server's address and the box's
+  key. So the site holds only what it can't open, a copy sealed for one server can't be replayed
+  against another, and one sealed to another box won't open. The gateway sends it to that server
+  on every request of the run and nowhere else, never to the model or the program, and blanks it
+  out of anything the server sends back. OAuth client credentials are swapped for a token by the
+  gateway, through the same address check. A result made with a key says so, since its numbers are
+  what an account gets.
+- **The site drives the lab, with signed commands.** Store or delete a sealed key, test some
+  servers again, the failures or all of them with a model, bench a model, switch the model: each
+  is a command to the stats service, signed with HMAC-SHA256 over the version, the time and the
+  body, with a secret only root reads on the box (handed to the stats service alone) and kept in
+  the site's settings. A command over a minute old or seen before is refused. A command only
+  writes a file in the inbox; the harness acts on it as itself, as it does on a person's. None
+  carries code or an address: the servers to call still come from the public list, and a key only
+  ever goes to the server it was sealed for. The service that takes the commands can store a
+  sealed key and can't open one.
+- **The box signs what it tells the site.** With the command secret set, the stats, the results
+  and a transcript carry an HMAC over the version, the time, the path and the body. The stats are
+  where the site learns the box's public key, so an unsigned one would let another machine on the
+  local network hand the site its own key and collect every key sealed to it; signed, it can't. The
+  public half lives beside the private half in `/etc/anchor-lab`, root's folder, so no process
+  that reads strangers' text can change which key the site seals to. The fingerprint is printed by
+  `install.sh` and shown on the admin page, for a person to compare once.
+- **A run can be read from the admin page, and isn't kept there.** The transcripts used to be for
+  a person on the box only. `GET /v1/run`, signed like a command, sends one run's tool list,
+  programs, outputs, model replies and events, found from the run's own result line rather than a
+  path the asker gives. The site passes it to an admin's browser as plain text and keeps none of
+  it, and it never goes into a prompt. Results and the stats still carry only numbers and words
+  from fixed lists.
 - **The admin page sees the lab, over HTTP, numbers only.** `anchor-lab stats` (`anchor-lab-stats.service`) answers
   `GET /v1/stats` on the box's own address on the local network, never every interface. It reads
   the state and `/proc` and `/sys` and writes nothing, and runs as a user made for it each start,
@@ -269,9 +306,9 @@ real run, because the page should be shaped by what the results look like.
 - **Sharing the result format as Go code between the lab and the site.** The collector should be
   written against the format, not against the lab's source, so a compromised box can't rely on a
   quirk both sides share.
-- **Keys for servers that need an account, in the first version.** Each key is something to steal
-  and something that can spend. They come later, one listing at a time, injected by the gateway and
-  never shown to the model or the program.
+- **Keys in plain text anywhere, the site included.** Each key is something to steal and something
+  that can spend. They were left out of the first version for that reason; they came in sealed to
+  the box, so a site's database or backup that leaks gives nothing usable.
 
 ## Numbers
 

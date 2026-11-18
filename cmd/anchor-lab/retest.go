@@ -6,10 +6,6 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"sort"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/Anchor-Terminal/anchorlab/journal"
 )
@@ -64,7 +60,7 @@ func retestCmd(args []string, out io.Writer) error {
 		if current == "" {
 			return errors.New("-failed: the lab runs connect only, so no server has failed an explore")
 		}
-		for _, s := range failedWith(*state, current) {
+		for _, s := range journal.FailedWith(*state, current) {
 			add(s)
 		}
 	}
@@ -78,9 +74,7 @@ func retestCmd(args []string, out io.Writer) error {
 		fmt.Fprintln(out, "nothing to retest")
 		return nil
 	}
-	body := with + "\n" + strings.Join(slugs, "\n") + "\n"
-	name := "retest-" + strconv.FormatInt(time.Now().UnixNano(), 10) + ".request"
-	if err := journal.WriteInbox(*state, name, []byte(body)); err != nil {
+	if err := journal.QueueRetest(*state, with, slugs); err != nil {
 		return fmt.Errorf("asking the lab to retest: %w (is this user in the anchorlab group? install.sh adds the user who ran it)", err)
 	}
 	what := plural(len(slugs), "server")
@@ -92,28 +86,3 @@ func retestCmd(args []string, out io.Writer) error {
 }
 
 var retestSlug = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,79}$`)
-
-// failedWith is the servers whose latest explore with this model came out failure or partial.
-func failedWith(state, model string) []string {
-	type latest struct {
-		at      time.Time
-		outcome string
-	}
-	by := map[string]latest{}
-	journal.Results(state, 0, func(_ int, _ []byte, r journal.Result) {
-		if r.Task != "explore" || r.Model != model {
-			return
-		}
-		if l, ok := by[r.Slug]; !ok || r.Ended.After(l.at) {
-			by[r.Slug] = latest{r.Ended, r.Outcome}
-		}
-	})
-	var out []string
-	for s, l := range by {
-		if l.outcome == "failure" || l.outcome == "partial" {
-			out = append(out, s)
-		}
-	}
-	sort.Strings(out)
-	return out
-}

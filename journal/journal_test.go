@@ -1,9 +1,12 @@
 package journal
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // A run's folder is research/<model>/<company>/<tool>/<run>, and no name from a list or a setting
@@ -37,5 +40,45 @@ func TestInboxModel(t *testing.T) {
 	}
 	if fi, _ := os.Stat(filepath.Join(state, "inbox", "model")); fi.Mode().Perm() != 0o644 {
 		t.Errorf("mode %v: the harness has to read what another user wrote", fi.Mode().Perm())
+	}
+}
+
+// An export sends the lines after the one asked for, at most a page of them, and says where to
+// ask from next; a line still being written waits.
+func TestExport(t *testing.T) {
+	dir := t.TempDir()
+	body := "{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n{\"n\":5"
+	os.WriteFile(filepath.Join(dir, "results.ndjson"), []byte(body), 0o640)
+	for _, c := range []struct {
+		after, max int
+		want       string
+	}{
+		{0, 0, "anchor-lab-export/1 4\n{\"n\":1}\n{\"n\":2}\n{\"n\":3}\n{\"n\":4}\n"},
+		{1, 2, "anchor-lab-export/1 3\n{\"n\":2}\n{\"n\":3}\n"},
+		{4, 2, "anchor-lab-export/1 4\n"},
+		{9, 0, "anchor-lab-export/1 4\n"},
+	} {
+		var b bytes.Buffer
+		if err := Export(dir, c.after, c.max, &b); err != nil || b.String() != c.want {
+			t.Errorf("after %d, max %d: %q, %v", c.after, c.max, b.String(), err)
+		}
+	}
+	var b bytes.Buffer
+	if Export(t.TempDir(), 0, 0, &b); b.String() != "anchor-lab-export/1 0\n" {
+		t.Errorf("no file yet: %q", b.String())
+	}
+}
+
+// Retest requests come out oldest first, with the model and the slugs they name.
+func TestRetestRequests(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	WriteInbox(state, "retest-2.request", []byte("gpt-oss-120b\nkiwi\n\nletme\n"))
+	WriteInbox(state, "retest-1.request", []byte("qwen3.5-122b-a10b\nzenrows\n"))
+	old := time.Now().Add(-time.Minute)
+	os.Chtimes(filepath.Join(state, "inbox", "retest-1.request"), old, old)
+	rs := RetestRequests(state)
+	if len(rs) != 2 || rs[0].Model != "qwen3.5-122b-a10b" || strings.Join(rs[1].Slugs, ",") != "kiwi,letme" || rs[1].Model != "gpt-oss-120b" {
+		t.Errorf("requests: %+v", rs)
 	}
 }

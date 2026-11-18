@@ -23,7 +23,7 @@ func TestSync(t *testing.T) {
 		j.Result(journal.Result{Slug: slug, Task: "connect", Status: "ok", Ended: time.Now()})
 	}
 	var out bytes.Buffer
-	if err := export(state, 1, &out); err != nil {
+	if err := journal.Export(state, 1, 0, &out); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")

@@ -199,6 +199,17 @@ small, they use the standard library only, and they treat everything above as da
   each agent, which is what the cell units now do from a file. `install.sh` removes the wrapper when it finds it on the
   box and says so. It leaves the folder of earlier agents' reports alone, and it prints any sudo
   rule that names the wrapper for root to take out.
+- **Results reach the site over the same HTTP, as the export.** `GET /v1/results?after=N` on the
+  stats service sends the result lines after N, 500 at most, as they are in `results.ndjson`, with
+  the line to ask from next. They're already only numbers and fixed words, and the site checks each
+  field anyway. The SSH `sync export` answers the same; HTTP is the one in use, because the port,
+  its three walls and the site's client were there already for the stats.
+- **Testing again is a request in the inbox, like a bench.** `anchor-lab retest` names servers, or
+  every one the model failed, or all of them, and a model. The harness runs it between two tests
+  as its own user, so it needs no sudo. A slug that isn't on the target list is skipped, so a
+  request can't send the lab anywhere the list doesn't. It doesn't switch the lab's model: a second
+  model on the first one's failures tells a server's fault from a model's, and a full test with
+  another model gives that model's results without changing what the lab runs on.
 - **The admin page sees the lab, over HTTP, numbers only.** `anchor-lab stats` (`anchor-lab-stats.service`) answers
   `GET /v1/stats` on the box's own address on the local network, never every interface. It reads
   the state and `/proc` and `/sys` and writes nothing, and runs as a user made for it each start,

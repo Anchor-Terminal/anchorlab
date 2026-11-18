@@ -13,7 +13,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -45,7 +44,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | model | targets | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | model | targets | retest | version")
 		os.Exit(2)
 	}
 	var err error
@@ -67,6 +66,8 @@ func main() {
 		err = modelCmd(args, os.Stdout)
 	case "targets":
 		err = targetsCmd(args)
+	case "retest":
+		err = retestCmd(args, os.Stdout)
 	case "version":
 		fmt.Println("anchor-lab", version, "bench", bench.Version)
 	default:
@@ -150,6 +151,59 @@ func run(args []string) error {
 			last[k] = r.Ended
 		}
 	})
+	// retestQueued tests the servers a retest request names, with the model it names, whenever they
+	// were last tested: today's failures again after a change to the gateway, or a second model on
+	// the servers the first one failed, to tell a server's fault from a model's. A slug that isn't
+	// on the list of targets is skipped, so a request can't send the lab anywhere the list doesn't.
+	retestQueued := func(list []targets.Target) {
+		bySlug := map[string]targets.Target{}
+		for _, t := range list {
+			bySlug[t.Slug] = t
+		}
+		for _, rq := range journal.RetestRequests(*state) {
+			if ctx.Err() != nil {
+				return
+			}
+			os.Remove(rq.File)
+			ro := o
+			if rq.Model == "" || !modelName.MatchString(rq.Model) {
+				j.Event("", "retest.refused", map[string]any{"model": rq.Model})
+				continue
+			}
+			b, err := newBrain(*modelURL, rq.Model, *maxTokens, *modelWait, *temperature)
+			if err != nil {
+				j.Event("", "retest.refused", map[string]any{"model": rq.Model})
+				continue
+			}
+			ro.Model, ro.Brain = rq.Model, b
+			j.Event("", "retest.start", map[string]any{"model": rq.Model, "servers": len(rq.Slugs), "all": len(rq.Slugs) == 1 && rq.Slugs[0] == "*"})
+			done, skipped := 0, 0
+			slugs := rq.Slugs
+			if len(slugs) == 1 && slugs[0] == "*" { // a full test: every server on the list
+				slugs = nil
+				for _, t := range list {
+					slugs = append(slugs, t.Slug)
+				}
+			}
+			for _, slug := range slugs {
+				t, ok := bySlug[slug]
+				if !ok {
+					skipped++
+					continue
+				}
+				if ctx.Err() != nil {
+					break
+				}
+				for _, r := range agent.Run(ctx, ro, t) {
+					fmt.Printf("%s %-8s %s (retest, %s): %s, %s, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, rq.Model, r.Status, r.Outcome, r.Calls, r.Errors)
+					last[key(t.Slug, rq.Model)] = r.Ended
+				}
+				done++
+				sleep(ctx, *pause)
+			}
+			j.Event("", "retest.end", map[string]any{"model": rq.Model, "tested": done, "skipped": skipped})
+		}
+	}
 	j.Event("", "harness.start", map[string]any{"harness": version, "model": o.Model, "targets": *list})
 	for ctx.Err() == nil {
 		f, dropped, err := targets.Load(*list)
@@ -169,9 +223,10 @@ func run(args []string) error {
 			if *only != "" && t.Slug != *only {
 				continue
 			}
-			// benches asked for since the last test, then the model as it stands now
+			// benches and retests asked for since the last test, then the model as it stands now
 			if !*once && *only == "" {
 				benchQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
+				retestQueued(f.Targets)
 			}
 			use(current())
 			if *only == "" && time.Since(last[key(t.Slug, o.Model)]) < *retest {
@@ -189,6 +244,9 @@ func run(args []string) error {
 		}
 		if tested == 0 {
 			benchQueued(ctx, j, *state, *sock, *unsafeCells, *modelURL, *maxTokens, *modelWait, *temperature)
+			if err == nil {
+				retestQueued(f.Targets)
+			}
 			sleep(ctx, time.Minute)
 		}
 	}
@@ -424,7 +482,7 @@ func syncCmd(args []string) error {
 		if err != nil || after < 0 {
 			return errors.New("export wants a line number")
 		}
-		return export(*state, after, os.Stdout)
+		return journal.Export(*state, after, 0, os.Stdout)
 	case len(ask) == 1 && ask[0] == "targets":
 		b, err := io.ReadAll(io.LimitReader(os.Stdin, 8<<20))
 		if err != nil {
@@ -447,37 +505,6 @@ func syncCmd(args []string) error {
 		return nil
 	}
 	return errors.New(`sync answers "export N" and "targets", nothing else`)
-}
-
-func export(state string, after int, w io.Writer) error {
-	f, err := os.Open(filepath.Join(state, "results.ndjson"))
-	if os.IsNotExist(err) {
-		_, err = fmt.Fprintf(w, "anchor-lab-export/1 0\n")
-		return err
-	}
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	var lines [][]byte
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
-	n := 0
-	for sc.Scan() {
-		if n++; n > after {
-			lines = append(lines, append([]byte(nil), sc.Bytes()...))
-		}
-	}
-	if err := sc.Err(); err != nil {
-		return err
-	}
-	bw := bufio.NewWriter(w)
-	fmt.Fprintf(bw, "anchor-lab-export/1 %d\n", n)
-	for _, l := range lines {
-		bw.Write(l)
-		bw.WriteByte('\n')
-	}
-	return bw.Flush()
 }
 
 func targetsCmd(args []string) error {

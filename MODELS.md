@@ -191,8 +191,10 @@ temperature of its own unless `ANCHOR_LAB_TEMPERATURE` is set, so these apply.
 
 Notes:
 
-- **Qwen.** The 27B models are dense, so every token reads all 19 GB: slow on this machine, under
-  10 tokens a second. The two MoE models read only their active experts (3B or 10B a token) and
+- **Qwen.** The 27B models are dense, so every token reads the whole file (28.6 GB for
+  `qwen3.8-27b` at Q8_0, 17.4 GB for Swift's Q4_K_M): slow on this machine, whose memory moves
+  about 256 GB/s at most. `qwen3.8-27b` wrote 7.6 tokens a second on 18 November 2026, which is
+  close to that limit, so no setting makes it much faster. The two MoE models read only their active experts (3B or 10B a token) and
   are several times faster. The publisher's non-thinking settings are temperature 0.7, top_p 0.8
   and presence_penalty 1.5, for a preset of your own that turns thinking off.
 - **Qwen3.5-122B-A10B** comes in two files; the preset names the first and llama.cpp finds the

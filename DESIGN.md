@@ -124,6 +124,13 @@ small, they use the standard library only, and they treat everything above as da
   against the 122B's 62, and its smallest publisher GGUF is 103 GB. ISTA-DASLab's GSQ-RCO IQ3_XXS
   is 75.8 GB and, by their card, matches the full model on AIME25. It's below the 4-bit line we
   record elsewhere, which is why it's named as theirs; the evaluation says whether it holds up.
+- **Reading the logs needs no sudo.** Both installers put the user who ran them with sudo in
+  `systemd-journal` as well as `anchorlab`, so `journalctl -u llama-server`, `-u anchor-lab` and
+  `-u 'anchor-lab-cell@*'`, which the docs and the harness's own errors point to, work as that user.
+  It's Debian's own group for reading the system journal, and it only reads. It shows every unit's
+  log on the box, not only the lab's, to a person who already installed with sudo. A log file per
+  service readable by the anchorlab group would be narrower, and would mean rotating files
+  ourselves. Found on 18 November 2026, when the hint models/install.sh prints showed nothing.
 - **Removing and swapping a model needs no sudo.** "A command to remove a model and switch to a new
   one" (Vlad). `models/fetch.sh remove`, `swap` and `prune` work on the models folder as the user who
   downloads, and switching is `anchor-lab model use`, a file in the inbox, as before. `remove`

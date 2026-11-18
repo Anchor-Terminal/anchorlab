@@ -126,7 +126,8 @@ MCP server, which needs no key and has seven tools, all marked read-only.
 
 From the clone, after `./build.sh`: `sudo bash install.sh`. It makes the `anchorlab` and `labsync`
 users, installs the binary and the units, and installs nothing else. It adds you, the user who ran
-it, to the `anchorlab` group: log in again, and everything after this needs no sudo. It can be run
+it, to the `anchorlab` group, and to `systemd-journal` so `journalctl` shows the lab's logs: log in
+again, and everything after this needs no sudo. It can be run
 again: it replaces the binary and the units and leaves the state alone. It prints what's left:
 
 1. A model: `anchor-lab model use <name>` (the names in `MODELS.md`). The harness speaks to

@@ -153,6 +153,9 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 	}
 	fmt.Fprintf(w, "anchor-lab %s · %s · %d targets · %s\n\n", s.Harness, model, s.Targets, last)
 
+	if !s.PausedUntil.IsZero() {
+		fmt.Fprintf(w, "paused   until %s, after the test or question in progress (anchor-lab pause -off to go on now)\n", s.PausedUntil.Local().Format("Mon 15:04"))
+	}
 	if c := s.Current; c != nil {
 		stage := "connecting"
 		if c.Stage == "exploring" {

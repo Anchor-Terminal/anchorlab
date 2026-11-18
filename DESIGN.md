@@ -281,6 +281,17 @@ small, they use the standard library only, and they treat everything above as da
   stats count it from the eval journal without reading results. An evaluation runs for hours, so
   the stats read yesterday's events for one that started before midnight. The queue is words from
   a fixed list and model names that pass the same check as everywhere else.
+- **A pause, for the night.** Vlad, 18 November 2026: "i need an option to pause it the lab since
+  it's creating too much heat in the room overnight and people can't sleep, i want to pause it for 8
+  hours as an option". `anchor-lab pause -for 8h` (8 hours unless told otherwise), or the Lab tab's
+  button through the signed `pause` command, writes `inbox/pause` holding the time it ends;
+  `anchor-lab pause -off` or the `resume` command removes it. The harness looks before each test,
+  each bench server and each evaluation question, finishes the one in progress and waits, then
+  goes on by itself where it stopped, with nothing to queue again. It's a file in the inbox like
+  every other request, so it needs no sudo. A pause is at most 24 hours, and a file further off
+  than that, already past or not a time is no pause, so a mistake can't stop the lab for ever. The
+  model's server stays up, idle: the heat is the work, and loading the model again in the morning
+  would only cost time.
 - **A stop isn't a failure.** On 18 November 2026 an install stopped qwen3.8-27b's evaluation part
   way, and the log called it `eval.failed`, the same as a model that broke. Vlad agreed it should
   say so: "yeah, we should do that". When the harness is stopping (a restart or an install), an

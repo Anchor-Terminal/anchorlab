@@ -115,3 +115,41 @@ func TestModelRequestOrder(t *testing.T) {
 		t.Errorf("order: %v, want %v", got, want)
 	}
 }
+
+// A pause holds until its time; one past, one further off than a pause may ask for, or a file
+// that isn't a time is no pause, so a mistake can't stop the lab for ever.
+func TestPause(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	now := time.Date(2026, 11, 18, 22, 40, 0, 0, time.UTC)
+	if _, ok := PausedUntil(state, now); ok {
+		t.Error("paused with no file")
+	}
+	if err := Pause(state, now.Add(8*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if until, ok := PausedUntil(state, now); !ok || !until.Equal(now.Add(8*time.Hour)) {
+		t.Errorf("an 8-hour pause: %v %v", until, ok)
+	}
+	if _, ok := PausedUntil(state, now.Add(9*time.Hour)); ok {
+		t.Error("still paused after its time")
+	}
+	Pause(state, now.Add(72*time.Hour))
+	if _, ok := PausedUntil(state, now); ok {
+		t.Error("a pause of three days was kept")
+	}
+	WriteInbox(state, "pause", []byte("tomorrow, please\n"))
+	if _, ok := PausedUntil(state, now); ok {
+		t.Error("words were read as a pause")
+	}
+	Pause(state, now.Add(time.Hour))
+	if err := Resume(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := PausedUntil(state, now); ok {
+		t.Error("still paused after Resume")
+	}
+	if err := Resume(state); err != nil {
+		t.Errorf("resuming with no pause: %v", err)
+	}
+}

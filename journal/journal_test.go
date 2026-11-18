@@ -82,3 +82,36 @@ func TestRetestRequests(t *testing.T) {
 		t.Errorf("requests: %+v", rs)
 	}
 }
+
+// Requests run in the order they were asked for, even when they were made within the same tick of
+// the filesystem's clock and their files carry the same time; a model asked for again keeps its
+// place; a request from before the time was written down still runs.
+func TestModelRequestOrder(t *testing.T) {
+	state := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(state, "inbox"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"qwen3.8-27b", "qwen3.5-122b-a10b", "gemma-4-31b", "gemma-4-26b-a4b"} {
+		if err := QueueEval(state, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// every file the same time, as a coarse clock would give them
+	same := time.Date(2026, 11, 18, 4, 28, 0, 0, time.UTC)
+	paths, _ := filepath.Glob(filepath.Join(state, "inbox", "eval-*.request"))
+	for _, p := range paths {
+		os.Chtimes(p, same, same)
+	}
+	if err := QueueEval(state, "qwen3.8-27b"); err != nil { // already waiting: keeps its place
+		t.Fatal(err)
+	}
+	// one written the old way, a model and nothing else, with a later file time
+	os.WriteFile(filepath.Join(state, "inbox", "eval-old.request"), []byte("old-model\n"), 0o644)
+	later := time.Now().Add(time.Hour)
+	os.Chtimes(filepath.Join(state, "inbox", "eval-old.request"), later, later)
+	got, _ := EvalRequests(state)
+	want := []string{"qwen3.8-27b", "qwen3.5-122b-a10b", "gemma-4-31b", "gemma-4-26b-a4b", "old-model"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("order: %v, want %v", got, want)
+	}
+}

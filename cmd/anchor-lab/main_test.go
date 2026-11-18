@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -103,5 +104,38 @@ func TestTargetsFromAPI(t *testing.T) {
 	out.ReadFrom(r)
 	if err != nil || !strings.Contains(out.String(), `"company": "exa.ai"`) {
 		t.Errorf("anchor-lab targets -from a file: %v\n%s", err, out.String())
+	}
+}
+
+// The harness waits out a pause, writes down when it began and ended, and clears the file once
+// it runs out; a stop while it waits ends the wait at once.
+func TestHold(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	j, _ := journal.Open(state)
+	start := time.Now()
+	hold(context.Background(), j, state) // no pause: straight on
+	if time.Since(start) > time.Second {
+		t.Fatal("waited with no pause")
+	}
+	journal.Pause(state, time.Now().Add(1500*time.Millisecond))
+	hold(context.Background(), j, state)
+	if d := time.Since(start); d < time.Second || d > 5*time.Second {
+		t.Errorf("waited %v for a pause of 1.5 s", d)
+	}
+	if _, err := os.Stat(filepath.Join(state, "inbox", "pause")); !os.IsNotExist(err) {
+		t.Error("the pause file is still there")
+	}
+	b, _ := os.ReadFile(filepath.Join(state, "events", time.Now().UTC().Format("2006-01-02")+".ndjson"))
+	if !strings.Contains(string(b), `"harness.paused"`) || !strings.Contains(string(b), `"harness.resumed"`) {
+		t.Errorf("events:\n%s", b)
+	}
+	journal.Pause(state, time.Now().Add(time.Hour))
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(200 * time.Millisecond); cancel() }()
+	start = time.Now()
+	hold(ctx, j, state)
+	if time.Since(start) > 3*time.Second {
+		t.Error("a stop didn't end the wait")
 	}
 }

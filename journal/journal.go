@@ -13,6 +13,7 @@ package journal
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -501,4 +502,35 @@ func FailedWith(state, model string) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// MaxPause is the longest a pause may ask for: a lab paused and forgotten would stop for ever.
+const MaxPause = 24 * time.Hour
+
+// Pause asks the harness to stop working until a time: <state>/inbox/pause, holding it. It
+// finishes the test or the question in progress, then waits, and goes on by itself at that time.
+func Pause(state string, until time.Time) error {
+	return WriteInbox(state, "pause", []byte(until.UTC().Format(time.RFC3339)+"\n"))
+}
+
+// Resume ends a pause now.
+func Resume(state string) error {
+	if err := os.Remove(filepath.Join(state, "inbox", "pause")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// PausedUntil is when the pause in the inbox ends, if one holds now. A time past, one further off
+// than a pause may ask for, or a file that isn't a time is no pause: the lab works.
+func PausedUntil(state string, now time.Time) (time.Time, bool) {
+	b, err := os.ReadFile(filepath.Join(state, "inbox", "pause"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	until, err := time.Parse(time.RFC3339, strings.TrimSpace(string(b)))
+	if err != nil || !until.After(now) || until.Sub(now) > MaxPause+time.Minute {
+		return time.Time{}, false
+	}
+	return until.UTC(), true
 }

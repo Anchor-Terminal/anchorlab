@@ -52,12 +52,17 @@ type Options struct {
 	// none. Its error is written down as one of a few fixed words, and the server is tested without
 	// a key. Never used with Open, which is the bench's.
 	Key func(ctx context.Context, t targets.Target) (*gateway.Credential, error)
-	now func() time.Time
+	// Hold, when set, waits out a pause before a test starts (journal.Pause)
+	Hold func(ctx context.Context)
+	now  func() time.Time
 }
 
 // Run tests one target and returns its results: connect always, explore when the server opened,
 // has a tool the lab may call and there's a model.
 func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
+	if o.Hold != nil {
+		o.Hold(ctx)
+	}
 	if o.now == nil {
 		o.now = time.Now
 	}

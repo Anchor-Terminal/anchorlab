@@ -172,6 +172,8 @@ today's counts, the machine, and the latest results. The admin page's Lab tab sh
 anchor-lab status                                 # on the box: reads the state itself
 anchor-lab status -from http://<the box>:8790     # from the machine the box lets ask (the stats below)
 anchor-lab status -watch                          # again every 10 seconds, until Ctrl-C
+anchor-lab pause                                  # stop for 8 hours after the work in progress (-for 2h for another length, up to 24h)
+anchor-lab pause -off                             # go on now
 anchor-lab status -json                           # the stats as they are, for a script
 anchor-lab retest -failed                         # test again what failed (Testing again, below)
 ```

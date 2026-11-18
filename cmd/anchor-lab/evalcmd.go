@@ -132,6 +132,7 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 		return eval.Score{}, err
 	}
 	o := evalOptions(j, b, model, sock, unsafeCells, mode)
+	o.Hold = func(ctx context.Context) { hold(ctx, j, state) }
 	began := time.Now()
 	cp, why, err := eval.OpenCheckpoint(state, model, mode, runs, began)
 	if err != nil {

@@ -55,6 +55,8 @@ type Stats struct {
 	Current    *Current  `json:"current,omitempty"`
 	Benching   string    `json:"benching,omitempty"`   // the model the harness is benching now, asked for through the inbox
 	Evaluating string    `json:"evaluating,omitempty"` // the model the harness is evaluating now (package eval)
+	// PausedUntil is when a pause asked for in the inbox ends (journal.Pause), zero when there's none
+	PausedUntil time.Time `json:"pausedUntil,omitempty"`
 	// Progress is how far the evaluation in progress has got, nil when there's none
 	Progress *Progress `json:"progress,omitempty"`
 	// Lately is how the latest evaluations and benches ended, newest first, today's and
@@ -263,6 +265,9 @@ func Collect(c Config) Stats {
 		}
 	}
 	s.Queue = queue(c.State)
+	if until, ok := journal.PausedUntil(c.State, t); ok {
+		s.PausedUntil = until
+	}
 	if s.Evaluating != "" {
 		// an evaluation's request stays in the inbox until it's done, so a stop doesn't lose its place
 		for i, q := range s.Queue {

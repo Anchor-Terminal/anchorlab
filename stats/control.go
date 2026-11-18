@@ -42,13 +42,14 @@ const commandSkew = time.Minute
 // Command is one thing the site asks of the lab.
 type Command struct {
 	V string `json:"v"`
-	// Do is key.put | key.delete | retest | bench | eval | model
+	// Do is key.put | key.delete | retest | bench | eval | model | pause | resume
 	Do     string       `json:"do"`
 	Slug   string       `json:"slug,omitempty"`
 	Sealed *seal.Sealed `json:"sealed,omitempty"`
 	Model  string       `json:"model,omitempty"`
 	Slugs  []string     `json:"slugs,omitempty"`  // retest: these, or ["*"] for every server
 	Failed bool         `json:"failed,omitempty"` // retest: every server Model failed or partly failed
+	Hours  int          `json:"hours,omitempty"`  // pause: how long, 1 to 24
 }
 
 var commandModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,95}$`)
@@ -243,6 +244,20 @@ func (sv *Server) do(c Command) (string, error) {
 			return "", errors.New("couldn't queue it")
 		}
 		return "queued an evaluation of " + c.Model, nil
+	case "pause":
+		if c.Hours < 1 || time.Duration(c.Hours)*time.Hour > journal.MaxPause {
+			return "", errors.New("hours to pause, from 1 to 24")
+		}
+		until := time.Now().Add(time.Duration(c.Hours) * time.Hour)
+		if err := journal.Pause(st, until); err != nil {
+			return "", errors.New("couldn't pause it")
+		}
+		return "paused until " + until.UTC().Format("2006-01-02 15:04") + " UTC", nil
+	case "resume":
+		if err := journal.Resume(st); err != nil {
+			return "", errors.New("couldn't end the pause")
+		}
+		return "the lab goes on", nil
 	case "model":
 		m := c.Model
 		if m != "none" && (!commandModel.MatchString(m) || strings.Contains(m, "..")) {

@@ -9,6 +9,7 @@
 //	anchor-lab stats     numbers about the lab over HTTP, for the site's admin page and nobody else
 //	anchor-lab status    the lab from a terminal: on the box, or -from the box's stats
 //	anchor-lab model     which model the lab uses; `model use <name>` switches it
+//	anchor-lab pause     stop the lab for a while (-for 8h), or -off to go on now
 //	anchor-lab targets   write the list of servers to test, from Anchor Terminal's public API
 //	anchor-lab version
 package main
@@ -73,6 +74,8 @@ func main() {
 		err = targetsCmd(args)
 	case "retest":
 		err = retestCmd(args, os.Stdout)
+	case "pause":
+		err = pauseCmd(args, os.Stdout)
 	case "boxkey":
 		err = boxKeyCmd(args, os.Stdout)
 	case "version":
@@ -120,6 +123,7 @@ func run(args []string) error {
 		Journal: j, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 6, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: fmt.Sprintf("anchor-lab/%s (+https://www.anchorterminal.com/benchmark/; %s)", version, *contact),
 		Dial:      dialer(*sock, *unsafeCells),
+		Hold:      func(ctx context.Context) { hold(ctx, j, *state) },
 	}
 	// keys we were given, sealed to the box: opened with its key, which only this service reads
 	if p := *boxKey; p != "" {
@@ -431,7 +435,7 @@ func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelUR
 	lim := gateway.DefaultLimits
 	lim.MinInterval = 0 // the servers are in this process
 	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 8, JobTimeout: 90 * time.Second, Attempts: 3,
-		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells)}
+		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells), Hold: func(ctx context.Context) { hold(ctx, j, state) }}
 	s := bench.RunN(ctx, o, runs)
 	if ctx.Err() != nil {
 		return s, errors.New("stopped before the end; no score kept")

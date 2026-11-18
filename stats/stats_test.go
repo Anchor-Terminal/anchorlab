@@ -378,3 +378,15 @@ func TestQueueModes(t *testing.T) {
 		t.Errorf("%+v", q)
 	}
 }
+
+// A pause in the inbox shows in the stats until its time.
+func TestPausedUntil(t *testing.T) {
+	c, now := fixture(t)
+	if s := Collect(c); !s.PausedUntil.IsZero() {
+		t.Errorf("paused with no file: %v", s.PausedUntil)
+	}
+	journal.Pause(c.State, now.Add(8*time.Hour))
+	if s := Collect(c); !s.PausedUntil.Equal(now.Add(8 * time.Hour)) {
+		t.Errorf("paused until %v", s.PausedUntil)
+	}
+}

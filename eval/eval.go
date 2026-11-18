@@ -56,6 +56,8 @@ type Options struct {
 	// Open connects to the MCP server: gateway.Open when nil. The tests give their own.
 	Open  func(ctx context.Context, url, userAgent string, lim gateway.Limits) (*gateway.Session, []gateway.Tool, error)
 	Tasks []Task // Tasks when nil
+	// Hold, when set, waits out a pause before each question (journal.Pause)
+	Hold func(ctx context.Context)
 	// Resume is the evaluation's checkpoint: questions it finished before a stop aren't asked
 	// again, and each one finished now is written down. Nil keeps nothing.
 	Resume *Checkpoint
@@ -495,6 +497,9 @@ func Run(ctx context.Context, o Options) []TaskResult {
 	tasks := o.tasks()
 	o.of = len(tasks)
 	for i, t := range tasks {
+		if _, done := o.Resume.Has(max(o.pass, 1), t.ID); !done && o.Hold != nil {
+			o.Hold(ctx)
+		}
 		if ctx.Err() != nil {
 			break
 		}

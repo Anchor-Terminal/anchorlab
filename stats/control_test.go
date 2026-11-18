@@ -148,3 +148,27 @@ func TestAnswersSigned(t *testing.T) {
 		}
 	}
 }
+
+// A pause from the admin page is hours from 1 to 24, and resume ends it.
+func TestPauseCommand(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	sv := &Server{Config: Config{State: state, Root: state}}
+	if did, err := sv.do(Command{V: CommandVersion, Do: "pause", Hours: 8}); err != nil || !strings.HasPrefix(did, "paused until ") {
+		t.Fatalf("pause: %q %v", did, err)
+	}
+	if until, ok := journal.PausedUntil(state, time.Now()); !ok || until.Sub(time.Now()) < 7*time.Hour {
+		t.Errorf("paused until %v %v", until, ok)
+	}
+	for _, h := range []int{0, -3, 25, 1000} {
+		if _, err := sv.do(Command{V: CommandVersion, Do: "pause", Hours: h}); err == nil {
+			t.Errorf("a pause of %d hours was taken", h)
+		}
+	}
+	if _, err := sv.do(Command{V: CommandVersion, Do: "resume"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := journal.PausedUntil(state, time.Now()); ok {
+		t.Error("still paused after resume")
+	}
+}

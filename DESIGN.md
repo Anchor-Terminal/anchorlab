@@ -272,6 +272,20 @@ small, they use the standard library only, and they treat everything above as da
   in `lately`, and a harness that starts again while one was running counts it as stopped even
   when nothing was logged. `anchor-lab status` prints the latest three, so the model to queue again
   is in front of whoever installed.
+- **A stopped evaluation carries on where it stopped.** Vlad, 18 November 2026: "can we add a thing
+  to be able to stop and continue mid eval? this way we don't waste that much time every time, like
+  now i cna;'t deploy for another few hours until the eval run i started at 6 finsihes". Each
+  question is written to `<state>/eval/resume/<model>.ndjson` as it finishes (`eval.Checkpoint`),
+  on disk before the next one starts. A stop keeps that file, and the request stays in the inbox,
+  still the oldest, so the next start takes it first and asks only what's left: a stop costs the
+  question in flight, about three minutes, not the hours before it. It's safe to carry on because
+  each question's right answer is worked out from the site when that question is asked, never
+  once for the whole evaluation. The score keeps the first start, counts the time it ran and not
+  the time it waited, and says in `resumed` how many times it was stopped; `harness` is the build
+  that finished it. A checkpoint of another task set, another number of passes, or older than seven
+  days is dropped and the evaluation starts again (`eval.restart` says why), since a score made of
+  passes weeks apart says more about the weeks than the model. The stats' progress counts on from
+  `eval.resume`, which carries what was done before the stop.
 - **Time is part of the benchmark, as its own number.** Vlad, 18 November 2026: "we should record
   everything and the time taken should be part of our benchmark", and asked whether time should
   count inside the Lab score or beside it, beside it. A score carries the seconds a question takes

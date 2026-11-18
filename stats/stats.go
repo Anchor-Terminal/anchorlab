@@ -258,6 +258,15 @@ func Collect(c Config) Stats {
 		}
 	}
 	s.Queue = queue(c.State)
+	if s.Evaluating != "" {
+		// an evaluation's request stays in the inbox until it's done, so a stop doesn't lose its place
+		for i, q := range s.Queue {
+			if q.Kind == "evaluate" && q.Model == s.Evaluating {
+				s.Queue = append(s.Queue[:i], s.Queue[i+1:]...)
+				break
+			}
+		}
+	}
 	if s.Model == "" {
 		// with no model a run is connect only, so its connect result finishes it
 		for run := range finished.connected {
@@ -347,6 +356,13 @@ type event struct {
 	Passes       int       `json:"passes"`
 	N            int       `json:"n"`
 	Of           int       `json:"of"`
+	// eval.resume: where an evaluation carried on from, counted before the stop
+	Started     time.Time `json:"started"`
+	Done        int       `json:"done"`
+	Right       int       `json:"right"`
+	Wrong       int       `json:"wrong"`
+	Skipped     int       `json:"skipped"`
+	Unreachable int       `json:"unreachable"`
 }
 
 // events reads today's events file: the counts, the harness's start and the run in progress.
@@ -836,7 +852,8 @@ func (s *Stats) track(e event) {
 }
 
 // progress reads the eval journal's events, yesterday's then today's, for the latest evaluation:
-// it starts at the first question of the first pass, and each question's end counts.
+// it starts at the first question of the first pass, or where a stopped one carried on with what
+// it had done (eval.resume), and each question's end counts.
 func progress(state string, t time.Time) *Progress {
 	var p *Progress
 	for _, day := range []time.Time{t.AddDate(0, 0, -1), t} {
@@ -852,6 +869,16 @@ func progress(state string, t time.Time) *Progress {
 				continue
 			}
 			switch e.Ev {
+			case "eval.resume":
+				if !modelOK.MatchString(e.Model) || e.Done < 0 || e.Done > 10000 || e.Right < 0 || e.Wrong < 0 || e.Skipped < 0 || e.Unreachable < 0 ||
+					e.Right+e.Wrong+e.Skipped+e.Unreachable > e.Done {
+					continue
+				}
+				started := e.Started.UTC()
+				if started.IsZero() || started.After(e.T) {
+					started = e.T.UTC()
+				}
+				p = &Progress{Model: e.Model, Started: started, Done: e.Done, Right: e.Right, Wrong: e.Wrong, Skipped: e.Skipped, Unreachable: e.Unreachable, LastEvent: e.T.UTC()}
 			case "eval.task":
 				if !modelOK.MatchString(e.Model) || e.Passes < 1 || e.Passes > 10 || e.Of < 1 || e.Of > 1000 ||
 					e.Pass < 1 || e.Pass > e.Passes || e.N < 1 || e.N > e.Of {

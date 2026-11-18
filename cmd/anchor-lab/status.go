@@ -148,8 +148,8 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 		}
 	}
 	last := "nothing written today"
-	if !s.LastEvent.IsZero() {
-		last = "last event " + ago(now, s.LastEvent)
+	if at := lastWritten(s); !at.IsZero() {
+		last = "last event " + ago(now, at)
 	}
 	fmt.Fprintf(w, "anchor-lab %s · %s · %d targets · %s\n\n", s.Harness, model, s.Targets, last)
 
@@ -328,4 +328,14 @@ func progressLine(p stats.Progress, now time.Time) string {
 		line += fmt.Sprintf(" · about %s a question, done around %s", each.Round(time.Second), now.Add(each*time.Duration(total-p.Done)).Local().Format("Mon 15:04"))
 	}
 	return line
+}
+
+// lastWritten is the newest thing the harness wrote: the day's events, or the evaluation in
+// progress, which writes to a journal of its own, so a running evaluation doesn't look stalled.
+func lastWritten(s stats.Stats) time.Time {
+	at := s.LastEvent
+	if p := s.Progress; p != nil && p.LastEvent.After(at) {
+		at = p.LastEvent
+	}
+	return at
 }

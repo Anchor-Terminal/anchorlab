@@ -110,10 +110,11 @@ func TestStatusCantRead(t *testing.T) {
 func TestStatusProgress(t *testing.T) {
 	now := time.Date(2026, 11, 18, 6, 0, 0, 0, time.UTC)
 	s := stats.Stats{Harness: "x", Evaluating: "gemma-4-31b", Queue: []stats.Queued{{Kind: "evaluate", Model: "qwen3.8-27b"}, {Kind: "retest", Model: "glm-4.7-flash"}},
-		Progress: &stats.Progress{Model: "gemma-4-31b", Started: now.Add(-time.Hour), Pass: 1, Passes: 3, Question: 31, Of: 59, Done: 30, Right: 21}}
+		LastEvent: now.Add(-7 * time.Hour),
+		Progress:  &stats.Progress{Model: "gemma-4-31b", Started: now.Add(-time.Hour), Pass: 1, Passes: 3, Question: 31, Of: 59, Done: 30, Right: 21, LastEvent: now.Add(-time.Minute)}}
 	var b strings.Builder
 	printStatus(&b, s, 0, now)
-	for _, want := range []string{"evaluating gemma-4-31b, question 31 of 59 in pass 1 of 3", "30 of 177 done, 21 right so far", "about 2m0s a question", "waiting  evaluate qwen3.8-27b · a full test with glm-4.7-flash"} {
+	for _, want := range []string{"evaluating gemma-4-31b, question 31 of 59 in pass 1 of 3", "30 of 177 done, 21 right so far", "about 2m0s a question", "waiting  evaluate qwen3.8-27b · a full test with glm-4.7-flash", "last event 60 s ago"} {
 		if !strings.Contains(b.String(), want) {
 			t.Errorf("no %q in\n%s", want, b.String())
 		}

@@ -78,6 +78,8 @@ type TaskResult struct {
 	Fetches      int    `json:"fetches"` // lab.fetch calls made
 	Lookups      int    `json:"lookups"` // of both, the ones that answered
 	ModelMs      int64  `json:"modelMs"`
+	CellMs       int64  `json:"cellMs"` // building and running the programs
+	WallMs       int64  `json:"wallMs"` // the whole task, from opening the server to the grade
 	PromptTokens int    `json:"promptTokens"`
 	OutputTokens int    `json:"outputTokens"`
 	Forbidden    bool   `json:"forbidden,omitempty"` // called a tool the task says to leave alone
@@ -113,6 +115,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	sess, tools, err := open(ctx, MCPURL(), o.UserAgent, o.Limits)
 	if err != nil {
 		res.Status = StatusUnreachable
+		res.WallMs = time.Since(started).Milliseconds()
 		j.Event(run, "eval.end", map[string]any{"task": t.ID, "status": res.Status})
 		return res
 	}
@@ -189,9 +192,10 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	res.Fetches, res.Lookups = fetches, mcpOK+fetchOK
 
 	res.Status = grade(ctx, t, src, before, errBefore, answer, gave, res)
+	res.WallMs = time.Since(started).Milliseconds()
 	j.Artifact(run, "answer.txt", []byte(answer+"\n"))
 	j.Event(run, "eval.end", map[string]any{"task": t.ID, "status": res.Status, "turns": res.Turns, "calls": res.Calls, "fetches": res.Fetches,
-		"modelMs": res.ModelMs, "promptTokens": res.PromptTokens, "outputTokens": res.OutputTokens})
+		"modelMs": res.ModelMs, "cellMs": res.CellMs, "wallMs": res.WallMs, "promptTokens": res.PromptTokens, "outputTokens": res.OutputTokens})
 	return res
 }
 
@@ -297,6 +301,7 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 			return "", false
 		}
 		r.Builds++
+		r.CellMs += int64(res.BuildMs + res.RunMs)
 		if !res.Built {
 			r.BuildFails++
 		}
@@ -413,8 +418,14 @@ type Score struct {
 	Unreachable  int               `json:"unreachable"`
 	Cut          map[string]int    `json:"cut,omitempty"` // every pass: calls to each MCP tool whose answer came back cut short
 	PerTask      map[string][2]int `json:"perTask"`       // passes right, passes scored
-	Flaky        []string          `json:"flaky,omitempty"`
-	Wrong        []string          `json:"wrong,omitempty"`
+	// Time is part of the benchmark beside the Lab score, not inside it: a separate number, so a
+	// fast model that's wrong and a slow one that's right aren't mixed into one figure.
+	SecPerTask float64          `json:"secPerTask"`       // a question on average, start to grade, over the tasks that ran
+	OutputTPS  float64          `json:"outputTps"`        // output tokens a second of the model's time
+	CellMs     int64            `json:"cellMs"`           // building and running programs, one pass on average
+	TaskMs     map[string]int64 `json:"taskMs,omitempty"` // each task's time, start to grade, on average over the passes it ran in
+	Flaky      []string         `json:"flaky,omitempty"`
+	Wrong      []string         `json:"wrong,omitempty"`
 }
 
 // Run is one pass over the set.
@@ -460,6 +471,17 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 		level[t.ID] = t.Level
 	}
 	n := len(passes)
+	var wall int64
+	ran := 0
+	taskWall, taskRan := map[string]int64{}, map[string]int64{}
+	var modelMsAll int64
+	outAll := 0
+	for _, p := range passes {
+		for _, r := range p {
+			modelMsAll += r.ModelMs
+			outAll += r.OutputTokens
+		}
+	}
 	for _, p := range passes {
 		for _, r := range p {
 			s.Turns += r.Turns
@@ -468,8 +490,15 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			s.Calls += r.Calls
 			s.Fetches += r.Fetches
 			s.ModelMs += r.ModelMs
+			s.CellMs += r.CellMs
 			s.PromptTokens += r.PromptTokens
 			s.OutputTokens += r.OutputTokens
+			if r.Status != StatusUnreachable && r.WallMs > 0 {
+				wall += r.WallMs
+				ran++
+				taskWall[r.ID] += r.WallMs
+				taskRan[r.ID]++
+			}
 			if r.Forbidden {
 				s.Forbidden++
 			}
@@ -492,7 +521,20 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			s.PerTask[r.ID] = pt
 		}
 	}
+	if ran > 0 {
+		s.SecPerTask = float64(wall/int64(ran)) / 1000
+	}
+	if modelMsAll > 0 {
+		s.OutputTPS = float64(int64(float64(outAll)/(float64(modelMsAll)/1000)*10)) / 10
+	}
+	for id, w := range taskWall {
+		if s.TaskMs == nil {
+			s.TaskMs = map[string]int64{}
+		}
+		s.TaskMs[id] = w / taskRan[id]
+	}
 	if n > 0 {
+		s.CellMs /= int64(n)
 		s.Turns, s.Builds, s.BuildFails, s.Calls, s.Fetches = s.Turns/n, s.Builds/n, s.BuildFails/n, s.Calls/n, s.Fetches/n
 		s.ModelMs, s.PromptTokens, s.OutputTokens = s.ModelMs/int64(n), s.PromptTokens/n, s.OutputTokens/n
 	}

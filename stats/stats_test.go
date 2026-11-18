@@ -356,3 +356,14 @@ func TestProgressResumed(t *testing.T) {
 		t.Errorf("queue: %+v", s.Queue)
 	}
 }
+
+// The model picker gets each model's size from models.txt, and nothing for a model it doesn't list.
+func TestSizesOf(t *testing.T) {
+	got := sizesOf([]string{"qwen3.8-27b", "a-preset-of-our-own"})
+	if len(got) != 1 || got["qwen3.8-27b"] != 28595763840 {
+		t.Errorf("%v", got)
+	}
+	if sizesOf([]string{"a-preset-of-our-own"}) != nil {
+		t.Error("sizes for models models.txt doesn't list")
+	}
+}

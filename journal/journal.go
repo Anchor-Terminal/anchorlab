@@ -293,11 +293,15 @@ func WriteInbox(state, name string, b []byte) error {
 // BenchRequests are the models waiting to be benched, from <state>/inbox/bench-*.request, oldest
 // first. `anchor-lab bench -model <name>` writes one when it can't run the bench itself, and the
 // harness runs it as its own user between tests.
-func BenchRequests(state string) (models []string, files []string) { return modelRequests(state, "bench-") }
+func BenchRequests(state string) (models []string, files []string) {
+	return modelRequests(state, "bench-")
+}
 
 // EvalRequests are the models waiting to be evaluated, from <state>/inbox/eval-*.request, oldest
 // first, the same way.
-func EvalRequests(state string) (models []string, files []string) { return modelRequests(state, "eval-") }
+func EvalRequests(state string) (models []string, files []string) {
+	return modelRequests(state, "eval-")
+}
 
 func modelRequests(state, prefix string) (models []string, files []string) {
 	paths, _ := filepath.Glob(filepath.Join(state, "inbox", prefix+"*.request"))

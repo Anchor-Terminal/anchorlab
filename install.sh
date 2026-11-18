@@ -29,7 +29,22 @@ install -o root -g root -m 0755 "$here/anchor-lab" /usr/local/bin/anchor-lab.new
 mv -f /usr/local/bin/anchor-lab.new /usr/local/bin/anchor-lab
 install -d -o anchorlab -g anchorlab -m 0750 /var/lib/anchor-lab
 install -d -o anchorlab -g anchorlab -m 2770 /var/lib/anchor-lab/inbox
+install -d -o anchorlab -g anchorlab -m 2770 /var/lib/anchor-lab/inbox/keys
 install -d -o root -g anchorlab -m 0750 /etc/anchor-lab
+# The box's key pair (package seal): the private half readable by root alone and handed to the
+# harness's service by systemd (LoadCredential), the public half for the stats to give out, so the
+# admin's browser can seal a server's key to it. Made once; a box that has one keeps it.
+/usr/local/bin/anchor-lab boxkey -key /etc/anchor-lab/box.key -pub /var/lib/anchor-lab/box.pub
+chown root:root /etc/anchor-lab/box.key && chmod 0600 /etc/anchor-lab/box.key
+chmod 0644 /var/lib/anchor-lab/box.pub
+# The secret the site signs its commands with, readable by root alone and handed to the stats
+# service by systemd. The site's server needs the same, as ANCHOR_LAB_CONTROL_SECRET.
+newsecret=""
+if [ ! -s /etc/anchor-lab/control.secret ]; then
+    (umask 077; od -An -tx1 -N32 /dev/urandom | tr -d ' \n' >/etc/anchor-lab/control.secret)
+    newsecret=1
+fi
+chown root:root /etc/anchor-lab/control.secret && chmod 0600 /etc/anchor-lab/control.secret
 [ -f /etc/anchor-lab/env ] || install -o root -g anchorlab -m 0640 /dev/stdin /etc/anchor-lab/env <<'ENV'
 # The model the harness asks, served on this machine in the OpenAI chat format (llama.cpp's
 # llama-server does). Leave ANCHOR_LAB_MODEL empty and only the connect task runs.
@@ -85,18 +100,20 @@ echo "installed $(/usr/local/bin/anchor-lab version)"
 [ -z "$rules" ] || echo "  a sudo rule still names agent-run, for you to take out: $(echo $rules)"
 echo "  follow it:   tail -f /var/lib/anchor-lab/events/\$(date -u +%F).ndjson    (or journalctl -u anchor-lab -f)"
 echo "  how it goes: anchor-lab status   (no sudo once you're in the anchorlab group)"
+echo "  the box's key: $(cut -c1-16 /var/lib/anchor-lab/box.pub)…, sealed keys go to it from the admin page"
 [ -z "$operator" ] || echo "  added $operator to the anchorlab group: log in again, and the lab needs no sudo from then on"
 echo
 echo "Still to do by hand, once (README.md has each line):"
 echo "  1. a model: anchor-lab model use <name> (MODELS.md has the names)"
-echo "  2. the site server's public key in /var/lib/labsync/.ssh/authorized_keys, on one line, starting"
-echo "     restrict,command=\"/usr/local/bin/anchor-lab sync\" "
-echo "  3. labsync added to AllowUsers in sshd's config, key only"
-echo "  4. a list of targets: anchor-lab targets -inbox /var/lib/anchor-lab (from Anchor Terminal's public API)"
+echo "  2. a list of targets: anchor-lab targets -inbox /var/lib/anchor-lab (from Anchor Terminal's public API)"
+if [ -n "$newsecret" ]; then
+    echo "  3. a new command secret: the site's server needs the same one, as"
+    echo "     ANCHOR_LAB_CONTROL_SECRET=<it> in its env file. Read it with: sudo cat /etc/anchor-lab/control.secret"
+fi
 if [ -n "$listen" ] && [ -n "$allow" ]; then
-    echo "  5. stats on $listen for $allow: the firewall's input chain needs, before its drop,"
+    echo "  4. stats on $listen for $allow: the firewall's input chain needs, before its drop,"
     echo "     ip saddr ${allow%%,*} tcp dport ${listen##*:} accept"
 else
-    echo "  5. for the admin page: ANCHOR_LAB_STATS_LISTEN and ANCHOR_LAB_STATS_ALLOW in /etc/anchor-lab/env,"
+    echo "  4. for the admin page: ANCHOR_LAB_STATS_LISTEN and ANCHOR_LAB_STATS_ALLOW in /etc/anchor-lab/env,"
     echo "     then run this again (it turns the stats service on and prints the firewall line)"
 fi

@@ -1,6 +1,7 @@
-# The lab's numbers for the site's admin page: `anchor-lab stats` answers GET /v1/stats to the
-# site's server and nobody else. It reads the lab's state and writes nothing; it runs as a user made
-# for it each start, in the anchorlab group so it can read the journal.
+# The lab's numbers for the site's admin page: `anchor-lab stats` answers GET /v1/stats and
+# /v1/results to the site's server and nobody else, and takes its signed commands at POST
+# /v1/command. It reads the lab's state and writes only into the inbox, where a command becomes a
+# file the harness acts on; it runs as a user made for it each start, in the anchorlab group.
 #
 # Three walls, each on its own: the box's firewall lets only the site's server reach the port, this
 # unit lets the process talk to this machine and the local network only, and the program answers
@@ -24,6 +25,9 @@ Restart=on-failure
 RestartSec=15
 
 ReadOnlyPaths=/var/lib/anchor-lab
+ReadWritePaths=/var/lib/anchor-lab/inbox
+# the secret the site signs its commands with: root's file, for this service alone
+LoadCredential=control:/etc/anchor-lab/control.secret
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes

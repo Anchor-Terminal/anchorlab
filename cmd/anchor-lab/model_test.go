@@ -12,7 +12,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Anchor-Terminal/anchorlab/gateway"
 	"github.com/Anchor-Terminal/anchorlab/journal"
+	"github.com/Anchor-Terminal/anchorlab/seal"
+	"github.com/Anchor-Terminal/anchorlab/targets"
 )
 
 // a router like llama-server's: two models, one loaded, and a load endpoint
@@ -175,5 +178,31 @@ func TestRetest(t *testing.T) {
 	}
 	if err := retestCmd([]string{"-state", state, "-env", env, "-model", "../x", "kiwi"}, &out); err == nil {
 		t.Error("took a model that isn't one")
+	}
+}
+
+// The harness opens the sealed key for the server it's testing and turns it into what the
+// gateway sends; a key for another server, or with no box key loaded, is refused.
+func TestKeyOpener(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox", "keys"), 0o770)
+	k, _ := seal.NewKey()
+	x, _ := seal.Seal(k.PublicKey(), "zenrows", "https://mcp.zenrows.com/mcp", seal.Secret{Kind: "header", Name: "Authorization", Prefix: "Bearer ", Value: "abc123"})
+	b, _ := json.Marshal(x)
+	os.WriteFile(journal.KeyFile(state, "zenrows"), b, 0o640)
+	open := keyOpener(state, k, "test", gateway.DefaultLimits)
+	ctx := context.Background()
+	c, err := open(ctx, targets.Target{Slug: "zenrows", URL: "https://mcp.zenrows.com/mcp"})
+	if err != nil || c == nil || c.Header != "Authorization" || c.Value != "Bearer abc123" {
+		t.Errorf("opened: %+v %v", c, err)
+	}
+	if c, err := open(ctx, targets.Target{Slug: "kiwi", URL: "https://mcp.kiwi.com"}); c != nil || err != nil {
+		t.Errorf("no key: %+v %v", c, err)
+	}
+	if _, err := open(ctx, targets.Target{Slug: "zenrows", URL: "https://moved.example/mcp"}); err == nil {
+		t.Error("opened for a server at another address")
+	}
+	if _, err := keyOpener(state, nil, "test", gateway.DefaultLimits)(ctx, targets.Target{Slug: "zenrows", URL: "https://mcp.zenrows.com/mcp"}); err == nil {
+		t.Error("no box key, no error")
 	}
 }

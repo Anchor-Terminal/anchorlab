@@ -36,6 +36,7 @@ import (
 	"github.com/Anchor-Terminal/anchorlab/cell"
 	"github.com/Anchor-Terminal/anchorlab/gateway"
 	"github.com/Anchor-Terminal/anchorlab/journal"
+	"github.com/Anchor-Terminal/anchorlab/seal"
 	"github.com/Anchor-Terminal/anchorlab/stats"
 	"github.com/Anchor-Terminal/anchorlab/targets"
 )
@@ -44,7 +45,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | model | targets | retest | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | cell | sync | stats | status | model | targets | retest | boxkey | version")
 		os.Exit(2)
 	}
 	var err error
@@ -68,6 +69,8 @@ func main() {
 		err = targetsCmd(args)
 	case "retest":
 		err = retestCmd(args, os.Stdout)
+	case "boxkey":
+		err = boxKeyCmd(args, os.Stdout)
 	case "version":
 		fmt.Println("anchor-lab", version, "bench", bench.Version)
 	default:
@@ -100,6 +103,7 @@ func run(args []string) error {
 	retest := fs.Duration("retest", 7*24*time.Hour, "how long a server's last test stands before it's tested again")
 	pause := fs.Duration("pause", 20*time.Second, "between two servers")
 	contact := fs.String("contact", "agents@anchorterminal.com", "the contact address in the User-Agent")
+	boxKey := fs.String("box-key", boxKeyPath(), "the box's private key, for opening the keys we were given (default: from systemd's LoadCredential)")
 	fs.Parse(args)
 	if *list == "" {
 		*list = filepath.Join(*state, "inbox", "targets.json")
@@ -112,6 +116,16 @@ func run(args []string) error {
 		Journal: j, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 6, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: fmt.Sprintf("anchor-lab/%s (+https://www.anchorterminal.com/benchmark/; %s)", version, *contact),
 		Dial:      dialer(*sock, *unsafeCells),
+	}
+	// keys we were given, sealed to the box: opened with its key, which only this service reads
+	if p := *boxKey; p != "" {
+		if k, err := seal.LoadKey(p); err != nil {
+			j.Event("", "boxkey.failed", map[string]any{"why": "the box's key didn't load"})
+		} else {
+			o.Key = keyOpener(*state, k, o.UserAgent, o.Limits)
+		}
+	} else {
+		o.Key = keyOpener(*state, nil, o.UserAgent, o.Limits) // says so when a sealed key is waiting
 	}
 	// use sets the model the next tests ask, from the inbox when `anchor-lab model use` has written
 	// one, otherwise from -model. A name that won't do is written down and the model before stays.
@@ -447,13 +461,7 @@ func benchQueued(ctx context.Context, j *journal.Journal, state, sock string, un
 
 // queueBench asks the lab to bench a model: a request in its inbox, which benchQueued runs.
 func queueBench(state, model string) error {
-	name := "bench-" + strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
-			return r
-		}
-		return '-'
-	}, model) + ".request"
-	if err := journal.WriteInbox(state, name, []byte(model+"\n")); err != nil {
+	if err := journal.QueueBench(state, model); err != nil {
 		return fmt.Errorf("asking the lab to bench %s: %w (is this user in the anchorlab group? install.sh adds the user who ran it)", model, err)
 	}
 	return nil
@@ -647,7 +655,19 @@ func statsCmd(args []string) error {
 			ds = append(ds, d)
 		}
 	}
-	sv := &stats.Server{Allow: ips, Fresh: *fresh, Config: stats.Config{State: *state, Disks: ds, Model: os.Getenv("ANCHOR_LAB_MODEL"),
+	// the secret the site signs its commands with: systemd's credentials folder, which only this
+	// service reads (install.sh makes it). Without it, commands are off.
+	var secret []byte
+	if d := os.Getenv("CREDENTIALS_DIRECTORY"); d != "" {
+		if b, err := os.ReadFile(filepath.Join(d, "control")); err == nil {
+			secret = []byte(strings.TrimSpace(string(b)))
+		}
+	}
+	if len(secret) < 32 {
+		fmt.Fprintln(os.Stderr, "anchor-lab stats: no command secret (LoadCredential=control), so the site's commands are off")
+		secret = nil
+	}
+	sv := &stats.Server{Allow: ips, Fresh: *fresh, Secret: secret, Config: stats.Config{State: *state, Disks: ds, Model: os.Getenv("ANCHOR_LAB_MODEL"),
 		ModelURL: os.Getenv("ANCHOR_LAB_MODEL_URL"), Harness: version}}
 	hs := &http.Server{Handler: sv, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 8 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

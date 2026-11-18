@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,9 @@ type Result struct {
 	Ended   time.Time `json:"ended"`
 	Harness string    `json:"harness"`
 	Model   string    `json:"model,omitempty"` // the model that wrote the code, "" for a task with none
+	// Key is true when the run used a key we were given for the server (package seal): its numbers
+	// are what an account gets, not what anyone gets
+	Key bool `json:"key,omitempty"`
 
 	// Status is how far the connection got: ok | auth (the server wants credentials) | unreachable
 	// (no answer, TLS or DNS) | refused (an address we don't call) | error (it answered, not as MCP).
@@ -389,5 +393,54 @@ func RetestRequests(state string) []RetestRequest {
 	for i, r := range rs {
 		out[i] = r.RetestRequest
 	}
+	return out
+}
+
+// KeyFile is where the sealed key for a listing waits: <state>/inbox/keys/<slug>.json. The site's
+// command puts it there (package stats); only the harness, which holds the box's key, can open it.
+func KeyFile(state, slug string) string {
+	return filepath.Join(state, "inbox", "keys", filepath.Base(slug)+".json")
+}
+
+// QueueRetest asks the harness to test servers again with a model: a retest request in the inbox.
+// slugs ["*"] is every server on the list.
+func QueueRetest(state, model string, slugs []string) error {
+	body := model + "\n" + strings.Join(slugs, "\n") + "\n"
+	return WriteInbox(state, "retest-"+strconv.FormatInt(time.Now().UnixNano(), 10)+".request", []byte(body))
+}
+
+// QueueBench asks the harness to bench a model: a bench request in the inbox.
+func QueueBench(state, model string) error {
+	name := "bench-" + strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			return r
+		}
+		return '-'
+	}, model) + ".request"
+	return WriteInbox(state, name, []byte(model+"\n"))
+}
+
+// FailedWith is the servers whose latest explore with this model came out failure or partial.
+func FailedWith(state, model string) []string {
+	type latest struct {
+		at      time.Time
+		outcome string
+	}
+	by := map[string]latest{}
+	Results(state, 0, func(_ int, _ []byte, r Result) {
+		if r.Task != "explore" || r.Model != model {
+			return
+		}
+		if l, ok := by[r.Slug]; !ok || r.Ended.After(l.at) {
+			by[r.Slug] = latest{r.Ended, r.Outcome}
+		}
+	})
+	var out []string
+	for s, l := range by {
+		if l.outcome == "failure" || l.outcome == "partial" {
+			out = append(out, s)
+		}
+	}
+	sort.Strings(out)
 	return out
 }

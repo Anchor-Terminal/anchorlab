@@ -35,6 +35,7 @@ type resumeHead struct {
 	V       string    `json:"v"`
 	Set     string    `json:"set"`
 	Model   string    `json:"model"`
+	Mode    string    `json:"mode,omitempty"` // empty is code mode, as in a score
 	Runs    int       `json:"runs"`
 	Started time.Time `json:"started"`
 }
@@ -56,10 +57,13 @@ func ResumePath(state, model string) string {
 	return filepath.Join(state, "eval", "resume", safe+".ndjson")
 }
 
-// OpenCheckpoint carries on the model's evaluation where it stopped, when there's one of this set
-// and this many passes from the last ResumeMaxAge, and otherwise starts one. why says which, in
+// OpenCheckpoint carries on the model's evaluation where it stopped, when there's one of this set,
+// this mode and this many passes from the last ResumeMaxAge, and otherwise starts one. why says which, in
 // words from a fixed list: "new", "resumed", or why an old one was dropped.
-func OpenCheckpoint(state, model string, runs int, now time.Time) (c *Checkpoint, why string, err error) {
+func OpenCheckpoint(state, model, mode string, runs int, now time.Time) (c *Checkpoint, why string, err error) {
+	if mode == "" {
+		mode = ModeCode
+	}
 	path := ResumePath(state, model)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, "", err
@@ -74,7 +78,7 @@ func OpenCheckpoint(state, model string, runs int, now time.Time) (c *Checkpoint
 			why = "started over: the checkpoint couldn't be read"
 		case head.Set != Version:
 			why = "started over: the task set changed"
-		case head.Model != model || head.Runs != runs:
+		case head.Model != model || head.Runs != runs || head.Mode != mode && !(head.Mode == "" && mode == ModeCode):
 			why = "started over: a different evaluation"
 		case now.Sub(head.Started) > ResumeMaxAge:
 			why = "started over: stopped too long ago"
@@ -86,7 +90,7 @@ func OpenCheckpoint(state, model string, runs int, now time.Time) (c *Checkpoint
 	if why != "resumed" {
 		c.Done, c.PriorMs, c.Stops = map[int]map[string]TaskResult{}, 0, 0
 		c.Started = now.UTC()
-		b, _ := json.Marshal(resumeHead{V: ResumeVersion, Set: Version, Model: model, Runs: runs, Started: c.Started})
+		b, _ := json.Marshal(resumeHead{V: ResumeVersion, Set: Version, Model: model, Mode: mode, Runs: runs, Started: c.Started})
 		if err := os.WriteFile(path, append(b, '\n'), 0o640); err != nil {
 			return nil, "", err
 		}

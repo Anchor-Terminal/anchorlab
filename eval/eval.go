@@ -59,6 +59,8 @@ type Options struct {
 	// Resume is the evaluation's checkpoint: questions it finished before a stop aren't asked
 	// again, and each one finished now is written down. Nil keeps nothing.
 	Resume *Checkpoint
+	// Mode is ModeCode or ModeEither; empty is code mode
+	Mode string
 }
 
 // Statuses of one task in one pass.
@@ -88,6 +90,13 @@ type TaskResult struct {
 	PromptTokens int    `json:"promptTokens"`
 	OutputTokens int    `json:"outputTokens"`
 	Forbidden    bool   `json:"forbidden,omitempty"` // called a tool the task says to leave alone
+	// Native is the tools the model called itself, in either mode; Path how it got there: native,
+	// program, both or none
+	Native int    `json:"native,omitempty"`
+	Path   string `json:"path,omitempty"`
+	// NoTools is a task whose model server refused the request with tools in it, which went on
+	// with programs only
+	NoTools bool `json:"noTools,omitempty"`
 	// Cut are the MCP tools whose answer was too long for the lab and reached the program cut
 	// short, with how many times. Our own tools: an answer an agent can't take whole is ours to fix.
 	Cut map[string]int `json:"cut,omitempty"`
@@ -170,7 +179,14 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 		j.Event(run, "call", map[string]any{"tool": c.Tool, "status": c.Status, "http": c.HTTP, "ms": c.Ms, "dryRun": c.DryRun})
 	}
 
-	answer, gave := o.converse(ctx, run, t, sess, tools, fetchTool, &res)
+	var answer string
+	var gave bool
+	if o.Mode == ModeEither {
+		answer, gave = o.converseEither(ctx, run, t, sess, tools, fetchTool, &res)
+	} else {
+		answer, gave = o.converse(ctx, run, t, sess, tools, fetchTool, &res)
+	}
+	res.Path = path(res)
 
 	calls := sess.Calls()
 	mcpOK := 0
@@ -291,41 +307,12 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 			msgs = append(msgs, brain.Message{Role: "user", Content: "That reply had neither a program nor an ANSWER line. Reply with one go block holding a complete program, or ANSWER: <the answer>."})
 			continue
 		}
-		j.Artifact(run, fmt.Sprintf("code-%d.go", turn), []byte(code))
-		conn, err := o.Dial(ctx)
-		if err != nil {
-			j.Event(run, "cell.failed", map[string]any{"turn": turn})
+		out, ok := o.runProgram(ctx, run, fmt.Sprint(turn), code, sess, fetch, r)
+		if !ok {
 			return "", false
 		}
-		res, err := cell.Run(ctx, conn, code, o.JobTimeout, func(tool string, args json.RawMessage) any {
-			if tool == FetchTool {
-				return fetch(args)
-			}
-			return sess.CallTool(ctx, tool, args)
-		})
-		if err != nil {
-			j.Event(run, "cell.failed", map[string]any{"turn": turn})
-			return "", false
-		}
-		r.Builds++
-		r.CellMs += int64(res.BuildMs + res.RunMs)
-		if !res.Built {
-			r.BuildFails++
-		}
-		j.Artifact(run, fmt.Sprintf("output-%d.txt", turn), []byte(res.BuildErr+res.Stdout+"\n--- stderr ---\n"+res.Stderr))
 		var obs strings.Builder
-		switch {
-		case !res.Built:
-			fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 4000))
-		default:
-			fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 6000))
-			if res.Stderr != "" {
-				fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 1500))
-			}
-			if res.TimedOut {
-				obs.WriteString("It was stopped for running too long.\n")
-			}
-		}
+		obs.WriteString(out)
 		if turn == o.MaxTurns-1 {
 			obs.WriteString("\nYour next reply is the last one: give your ANSWER.")
 		} else {
@@ -334,6 +321,50 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 		msgs = append(msgs, brain.Message{Role: "user", Content: obs.String()})
 	}
 	return "", false
+}
+
+// runProgram builds and runs one program in a fresh cell, its calls going to the server and
+// lab.fetch, and returns what the model is told of it. It's false when the cell couldn't be had,
+// which is the box's failing and not the model's. at names the artifacts: the turn, and in either
+// mode the call within it.
+func (o Options) runProgram(ctx context.Context, run, at, code string, sess *gateway.Session, fetch func(json.RawMessage) gateway.Reply, r *TaskResult) (string, bool) {
+	j := o.Journal
+	j.Artifact(run, "code-"+at+".go", []byte(code))
+	conn, err := o.Dial(ctx)
+	if err != nil {
+		j.Event(run, "cell.failed", map[string]any{"at": at})
+		return "", false
+	}
+	res, err := cell.Run(ctx, conn, code, o.JobTimeout, func(tool string, args json.RawMessage) any {
+		if tool == FetchTool {
+			return fetch(args)
+		}
+		return sess.CallTool(ctx, tool, args)
+	})
+	if err != nil {
+		j.Event(run, "cell.failed", map[string]any{"at": at})
+		return "", false
+	}
+	r.Builds++
+	r.CellMs += int64(res.BuildMs + res.RunMs)
+	if !res.Built {
+		r.BuildFails++
+	}
+	j.Artifact(run, "output-"+at+".txt", []byte(res.BuildErr+res.Stdout+"\n--- stderr ---\n"+res.Stderr))
+	var obs strings.Builder
+	switch {
+	case !res.Built:
+		fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 4000))
+	default:
+		fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 6000))
+		if res.Stderr != "" {
+			fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 1500))
+		}
+		if res.TimedOut {
+			obs.WriteString("It was stopped for running too long.\n")
+		}
+	}
+	return obs.String(), true
 }
 
 // program is the go block in a reply, or "".
@@ -436,6 +467,23 @@ type Score struct {
 	// Resumed is how many times the evaluation was stopped and carried on from its checkpoint
 	// (Checkpoint), the harness in Harness being the one that finished it.
 	Resumed int `json:"resumed,omitempty"`
+	// Mode is the mode it ran in (ModeCode, ModeEither); empty on a code-mode score from before
+	// modes. Native is the tools the model called itself, a pass on average; Paths how many tasks,
+	// over every pass, it answered with native calls, programs, both or neither.
+	Mode   string         `json:"mode,omitempty"`
+	Native int            `json:"native,omitempty"`
+	Paths  map[string]int `json:"paths,omitempty"`
+	// NoTools is how many tasks, over every pass, the model's server refused tools for (a chat
+	// template that takes none): those went on with programs only
+	NoTools int `json:"noTools,omitempty"`
+}
+
+// ModeOf is a score's mode, code for one from before modes.
+func (s Score) ModeOf() string {
+	if s.Mode == "" {
+		return ModeCode
+	}
+	return s.Mode
 }
 
 // Run is one pass over the set.
@@ -483,6 +531,10 @@ func RunN(ctx context.Context, o Options, n int) Score {
 	}
 	s := Fold(o.tasks(), passes)
 	s.Model, s.Harness, s.Started, s.Ended = o.Model, o.Version, started, time.Now().UTC()
+	s.Mode = o.Mode
+	if s.Mode == "" {
+		s.Mode = ModeCode
+	}
 	s.WallMs = s.Ended.Sub(started).Milliseconds()
 	if c := o.Resume; c != nil && !c.Started.IsZero() {
 		// a score continued after a stop starts when the evaluation first did, and its time is
@@ -518,6 +570,16 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			s.BuildFails += r.BuildFails
 			s.Calls += r.Calls
 			s.Fetches += r.Fetches
+			s.Native += r.Native
+			if r.NoTools {
+				s.NoTools++
+			}
+			if r.Path != "" && r.Status != StatusUnreachable {
+				if s.Paths == nil {
+					s.Paths = map[string]int{}
+				}
+				s.Paths[r.Path]++
+			}
 			s.ModelMs += r.ModelMs
 			s.CellMs += r.CellMs
 			s.PromptTokens += r.PromptTokens
@@ -564,7 +626,7 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 	}
 	if n > 0 {
 		s.CellMs /= int64(n)
-		s.Turns, s.Builds, s.BuildFails, s.Calls, s.Fetches = s.Turns/n, s.Builds/n, s.BuildFails/n, s.Calls/n, s.Fetches/n
+		s.Turns, s.Builds, s.BuildFails, s.Calls, s.Fetches, s.Native = s.Turns/n, s.Builds/n, s.BuildFails/n, s.Calls/n, s.Fetches/n, s.Native/n
 		s.ModelMs, s.PromptTokens, s.OutputTokens = s.ModelMs/int64(n), s.PromptTokens/n, s.OutputTokens/n
 	}
 	for _, t := range tasks {
@@ -691,12 +753,13 @@ func Order(s []Score) {
 	})
 }
 
-// Latest is each model's newest score, best first: what a results page shows.
+// Latest is each model's newest score in each mode, best first: what a results page shows.
 func Latest(all []Score) []Score {
 	by := map[string]Score{}
 	for _, s := range all {
-		if cur, ok := by[s.Model]; !ok || s.Ended.After(cur.Ended) {
-			by[s.Model] = s
+		k := s.Model + "\x00" + s.ModeOf()
+		if cur, ok := by[k]; !ok || s.Ended.After(cur.Ended) {
+			by[k] = s
 		}
 	}
 	out := make([]Score, 0, len(by))

@@ -301,14 +301,17 @@ it with the same name runs with the build.
 ## The evaluation
 
 The bench asks whether a model can get each tool to answer. The evaluation asks whether it gets the
-right answer to a real question. It puts 59 questions about Anchor Terminal to a model, and the model
-answers each one by writing programs that call the site's MCP server (`https://www.anchorterminal.com/mcp`)
-and fetch its pages and API with the lab's own tool, `lab.fetch`, which only reaches that site.
+right answer to a real question. It puts 59 questions about Anchor Terminal to a model, which finds
+each answer through the site's MCP server (`https://www.anchorterminal.com/mcp`) and its pages and
+API, read with the lab's own tool, `lab.fetch`, which only reaches that site. In either mode, the
+default and the Lab score, the model calls those tools itself or writes a program that calls them,
+as it chooses; in code mode (`-mode code`) it writes programs only.
 
 ```
 anchor-lab eval -check                    # every task's right answer, from the site now, no model
 anchor-lab eval -model qwen3.8-27b -sample # ten tasks once, printed, not kept: a quick look
 anchor-lab eval -model qwen3.8-27b        # the whole set, three passes, kept
+anchor-lab eval -model qwen3.8-27b -mode code  # programs only, beside the Lab score
 anchor-lab eval -compare
 anchor-lab eval -flips qwen3.8-27b,qwen3.5-122b-a10b
 ```

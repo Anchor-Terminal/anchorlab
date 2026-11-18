@@ -367,3 +367,14 @@ func TestSizesOf(t *testing.T) {
 		t.Error("sizes for models models.txt doesn't list")
 	}
 }
+
+// A code-mode evaluation waits as one, beside the either-mode one for the same model.
+func TestQueueModes(t *testing.T) {
+	c, _ := fixture(t)
+	write(t, filepath.Join(c.State, "inbox", "eval-m1.request"), "m1\n1\n")
+	write(t, filepath.Join(c.State, "inbox", "eval-code-m1.request"), "m1\n2\ncode\n")
+	q := Collect(c).Queue
+	if len(q) != 2 || q[0].Mode != "" || q[1].Mode != "code" || q[1].Model != "m1" {
+		t.Errorf("%+v", q)
+	}
+}

@@ -42,7 +42,7 @@ const commandSkew = time.Minute
 // Command is one thing the site asks of the lab.
 type Command struct {
 	V string `json:"v"`
-	// Do is key.put | key.delete | retest | bench | model
+	// Do is key.put | key.delete | retest | bench | eval | model
 	Do     string       `json:"do"`
 	Slug   string       `json:"slug,omitempty"`
 	Sealed *seal.Sealed `json:"sealed,omitempty"`
@@ -235,6 +235,14 @@ func (sv *Server) do(c Command) (string, error) {
 			return "", errors.New("couldn't queue it")
 		}
 		return "queued a bench of " + c.Model, nil
+	case "eval":
+		if !commandModel.MatchString(c.Model) || strings.Contains(c.Model, "..") {
+			return "", errors.New("a model to evaluate")
+		}
+		if err := journal.QueueEval(st, c.Model); err != nil {
+			return "", errors.New("couldn't queue it")
+		}
+		return "queued an evaluation of " + c.Model, nil
 	case "model":
 		m := c.Model
 		if m != "none" && (!commandModel.MatchString(m) || strings.Contains(m, "..")) {

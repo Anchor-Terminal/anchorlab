@@ -2,6 +2,7 @@ package stats
 
 import (
 	"encoding/json"
+	"github.com/Anchor-Terminal/anchorlab/eval"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -155,6 +156,17 @@ func TestServer(t *testing.T) {
 	}
 	if w := ask("192.168.1.101:5000", "GET", "/v1/stats"); w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), "exa") {
 		t.Errorf("anyone else: %d %s", w.Code, w.Body)
+	}
+	// each model's latest evaluation, numbers and the set's own task ids
+	es := eval.Score{V: eval.Version, Model: "qwen3.8-27b", Runs: 3, Tasks: 51, Scored: 50, Correct: 40, Pct: 80, Ended: time.Now()}
+	if err := eval.Save(c.State, es); err != nil {
+		t.Fatal(err)
+	}
+	if w := ask("192.168.1.100:5000", "GET", "/v1/evals"); w.Code != 200 || !strings.Contains(w.Body.String(), EvalsVersion) || !strings.Contains(w.Body.String(), `"model":"qwen3.8-27b"`) {
+		t.Errorf("evals: %d %s", w.Code, w.Body)
+	}
+	if w := ask("192.168.1.101:5000", "GET", "/v1/evals"); w.Code != http.StatusForbidden {
+		t.Errorf("evals, anyone else: %d", w.Code)
 	}
 	if w := ask("192.168.1.100:5000", "GET", "/"); w.Code != 404 {
 		t.Errorf("another path: %d", w.Code)

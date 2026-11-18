@@ -43,18 +43,19 @@ const stale = 20 * time.Minute
 
 // Stats is the whole answer.
 type Stats struct {
-	V         string    `json:"v"`
-	At        time.Time `json:"at"`
-	Harness   string    `json:"harness"`
-	Model     string    `json:"model"`             // ANCHOR_LAB_MODEL, "" when only connect runs
-	ModelUp   *bool     `json:"modelUp,omitempty"` // the model's server answered /health; nil when there's no model
-	LastEvent time.Time `json:"lastEvent,omitempty"`
-	Started   time.Time `json:"harnessStarted,omitempty"` // the harness's last start today
-	Targets   int       `json:"targets"`
-	Current   *Current  `json:"current,omitempty"`
-	Benching  string    `json:"benching,omitempty"` // the model the harness is benching now, asked for through the inbox
-	Today     Today     `json:"today"`
-	Results   int       `json:"results"` // lines in results.ndjson
+	V          string    `json:"v"`
+	At         time.Time `json:"at"`
+	Harness    string    `json:"harness"`
+	Model      string    `json:"model"`             // ANCHOR_LAB_MODEL, "" when only connect runs
+	ModelUp    *bool     `json:"modelUp,omitempty"` // the model's server answered /health; nil when there's no model
+	LastEvent  time.Time `json:"lastEvent,omitempty"`
+	Started    time.Time `json:"harnessStarted,omitempty"` // the harness's last start today
+	Targets    int       `json:"targets"`
+	Current    *Current  `json:"current,omitempty"`
+	Benching   string    `json:"benching,omitempty"`   // the model the harness is benching now, asked for through the inbox
+	Evaluating string    `json:"evaluating,omitempty"` // the model the harness is evaluating now (package eval)
+	Today      Today     `json:"today"`
+	Results    int       `json:"results"` // lines in results.ndjson
 	// Box is the box's public key, which the admin's browser seals a server's key to (package seal)
 	Box *Box `json:"box,omitempty"`
 	// Keys are the sealed keys waiting in the inbox: which listing, which box key, since when.
@@ -312,7 +313,13 @@ func events(state string, t time.Time, s *Stats, finished finishedRuns) {
 		case "harness.start":
 			s.Started = e.T.UTC()
 			cur = nil
-			s.Benching = ""
+			s.Benching, s.Evaluating = "", ""
+		case "eval.start":
+			if modelOK.MatchString(e.Model) {
+				s.Evaluating = e.Model
+			}
+		case "eval.end", "eval.failed":
+			s.Evaluating = ""
 		case "bench.start":
 			if modelOK.MatchString(e.Model) {
 				s.Benching = e.Model
@@ -659,6 +666,9 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	case "/v1/run":
 		sv.transcript(w, r)
+		return
+	case "/v1/evals":
+		sv.evals(w)
 		return
 	default:
 		http.NotFound(w, r)

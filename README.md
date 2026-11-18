@@ -214,7 +214,7 @@ A result made with a key says so (`"key": true`).
 
 The site's admin page drives the lab with signed commands to `POST /v1/command` on the stats
 service: store or delete a sealed key, test servers again (some, the failures, or all) with a
-model, bench a model, switch the model. Each is HMAC-SHA256 over the version, the time and the
+model, bench or evaluate a model, switch the model. Each is HMAC-SHA256 over the version, the time and the
 body, with the secret in `/etc/anchor-lab/control.secret` (made by `install.sh`, root's alone,
 handed to the stats service by systemd). The site needs the same secret as
 `ANCHOR_LAB_CONTROL_SECRET`. A command more than a minute old, or sent twice, is refused, and each
@@ -227,6 +227,9 @@ site knows they came from the box: the stats carry the box's public key, which k
 `GET /v1/run?id=<run>`, signed the same way, answers with a run's transcript: the tool list, each
 program, what it printed, the model's replies and the events. The site shows it to an admin and
 keeps none of it.
+
+`GET /v1/evals`, signed the same way, answers with each model's latest evaluation score
+(`anchor-lab-evals/1`, `stats/evals.go`): numbers, the model's name and the set's own task ids.
 
 ## The admin page's numbers
 
@@ -293,6 +296,39 @@ your own the same way: a file that starts `//go:build privatebench`, in `package
 `Version`, `Cases` and `Right`, and build with `./build.sh <your file>`. A `_test.go.txt` file beside
 it with the same name runs with the build.
 
+## The evaluation
+
+The bench asks whether a model can get each tool to answer. The evaluation asks whether it gets the
+right answer to a real question. It puts 59 questions about Anchor Terminal to a model, and the model
+answers each one by writing programs that call the site's MCP server (`https://www.anchorterminal.com/mcp`)
+and fetch its pages and API with the lab's own tool, `lab.fetch`, which only reaches that site.
+
+```
+anchor-lab eval -check                    # every task's right answer, from the site now, no model
+anchor-lab eval -model qwen3.8-27b -sample # ten tasks once, printed, not kept: a quick look
+anchor-lab eval -model qwen3.8-27b        # the whole set, three passes, kept
+anchor-lab eval -compare
+anchor-lab eval -flips qwen3.8-27b,qwen3.5-122b-a10b
+```
+
+The tasks are in `eval/tasks.go`, public: level 1 is one lookup, level 2 a few lookups or a
+comparison, level 3 a filter, a join across the API's files or arithmetic over many listings. Eight
+have answers that don't move, five are traps (a listing that doesn't exist, a write tool to leave
+alone). The rest are worked out from the site's public API when the task runs, so they stay right
+as the listings change and a model can't learn them.
+
+A score counts a task right when it's right in more than half the passes it was scored in. An answer
+is checked against the site as it was when the task started and as it is when the model answered,
+so data that changed while the model worked doesn't cost it the task. A task whose subject left the
+site, or that has two right answers right now (a tie), is skipped for that pass, and one where the
+site didn't answer the harness isn't counted. An answer with no lookup behind it is wrong: the
+question is about the site today, not what a model remembers.
+
+`anchor-lab eval` run by you asks the lab to run it, like a bench (`eval-*.request` in the inbox),
+and the site's admin page can ask too. Scores go to `eval.ndjson`, each model's latest is served at
+`/v1/evals` for the site, and a score lists our MCP tools whose answers were too long and came back
+cut short, which are ours to make smaller.
+
 ## The research folder
 
 What the lab finds is filed by model, then company, then tool:
@@ -345,6 +381,8 @@ scripts find our settings without anything about our machines being written into
 /var/lib/anchor-lab/inbox/targets.json    the servers to test
 /var/lib/anchor-lab/bench.ndjson          every model's bench score
 /var/lib/anchor-lab/bench/                the bench's own events and runs, kept apart
+/var/lib/anchor-lab/eval.ndjson           every model's evaluation score
+/var/lib/anchor-lab/eval/                 the evaluation's own events and runs, kept apart
 ```
 
 A line of `results.ndjson` (format `anchor-lab-result/1`, `journal/journal.go`), with made-up

@@ -189,6 +189,49 @@ small, they use the standard library only, and they treat everything above as da
 - **The bench is our own cases, not real servers.** Real servers change, rate-limit and go down,
   and a model's score shouldn't move because a vendor's did. Real servers are what `explore`
   measures. The bench measures the model.
+- **An evaluation asks real questions with one right answer, of our own server.** The bench
+  measures whether a model can get a tool to answer, on servers we made up; explore measures a real
+  server. Neither says whether the model got a question right. Vlad, 18 November 2026: "Can we set
+  up an evaluation using our own mcp as the test to see which one does better, this way we can test
+  against something real". Anchor Terminal's own MCP server is the one to ask: the data is ours, so
+  we know the answers; we can call it as often as we like; and every write tool on it takes a dry
+  run. So `anchor-lab eval` puts 59 questions about the site to a model, which answers by writing
+  programs, as in explore.
+- **The tasks mix the MCP server, pages and the API, and some are hard.** "We should make it kind
+  of complicated at times otheriwse they will all get 100, like a mix of mcp and reading a page and
+  api" (Vlad). Beside the MCP server's tools a program has one tool of the lab's, `lab.fetch`, a
+  GET on the site and nowhere else (`eval.SitePath`; the address check is the gateway's), up to 4
+  MB, so a program can decode the API's files itself. Level 3 tasks filter, join files and do
+  arithmetic over hundreds of listings. DNS (the site's grade records) was left out: it didn't
+  resolve from where the set was written, and a task that fails for the network is a task that
+  measures the network.
+- **Right answers are worked out from the site when the task runs, and the set is public.** A
+  written-down answer goes stale the day a listing is re-graded. Each task's answer comes from the
+  public API as the task starts, so the set stays right as the data moves, and a model can't learn
+  answers that change. Eight have answers that don't move, as a floor: "known things we're small
+  enough that nobody would care about training on us" (Vlad). The private-set rule the bench keeps
+  isn't needed here, for those two reasons.
+- **Stale data never costs a model a task.** "Make sure we don't fall for stale data and fail
+  tests because our tests are not robust enough" (Vlad). An answer is checked against the site as it
+  was when the task started, and if that doesn't match, as it is when the model answered. A task
+  whose subject left the site, or that has two right answers right now (a tie), is skipped for the
+  pass, not failed; one where the site didn't answer the harness isn't counted, and a run where that
+  was most tasks keeps no score. `anchor-lab eval -check` works every answer out with no model, to
+  find a task the data broke before an evaluation runs. The harness reads the site with
+  `Cache-Control: no-cache`, and the MCP server and the API are served from the same loaded data, so
+  the two a model reads from agree.
+- **An answer with no lookup behind it is wrong.** The questions are about the site today. A model
+  that answers from memory gets nothing for it, even when it's right, except on the three tasks
+  the tool list it's shown answers by itself.
+- **A tool's answer cut short is our tool to fix.** The gateway hands a program at most 32 KB of a
+  tool's answer. "We should inpove our tools if the output got truncated" (Vlad). The gateway marks
+  a call whose answer was cut, and a score lists our tools by how often, so the evaluation finds
+  answers too long for an agent as well as models that can't cope.
+- **Three passes, flips and a sample, as the bench.** A task is right when it's right in more than
+  half the passes it was scored in. `-sample` runs ten tasks once and keeps nothing, for a quick
+  look at a model before the hours the whole set takes. Scores stay on the box in `eval.ndjson`
+  and its runs in a journal of their own; `/v1/evals` serves each model's latest, signed, numbers
+  and task ids only, for the site's results page.
 - **The lab is a repository of its own, and public.** It imports nothing from the site and the site
   imports nothing from it, so the binary on the box has none of the site's code in it. The site's
   collector is written against the formats (`anchor-lab-result/1`, `anchor-lab-stats/1`), not

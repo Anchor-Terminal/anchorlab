@@ -80,6 +80,18 @@ small, they use the standard library only, and they treat everything above as da
   held a fixed phrase and the text sat in `Text`, so a model printing `Error` never saw "missing
   required field" and couldn't fix its arguments. The text is a stranger's and stays on the box,
   like every tool description the model already reads.
+- **A change tool is called only in a dry run it declares.** Tools that create, send or delete
+  aren't called, because calling them on a production server would publish reviews, send mail or
+  remove things (it would on Anchor Terminal's own server). That leaves a server's write tools
+  untested, and a server can only be shown to work if all its tools are tried. Vlad, 18 November
+  2026: "we should have on our chnage of state mcp commands a flag that would return what we would
+  have done if the flag was not test". MCP has no dry run, and the servers that have one each name
+  it differently (`dry_run`, `__confirm`, a separate preview tool), so the lab reads one
+  declaration: `"_meta": {"anchorterminal.com/dryRun": true}` on the tool, with a boolean `dryRun`
+  in its input schema. Such a tool is callable, destructive or not, and the gateway sets
+  `dryRun: true` on every call to it itself, whatever the program sent, so a model's program can't
+  make it real. Both halves are needed: a `dryRun` argument alone could be one the server ignores,
+  and a declaration alone has nothing to set. A result marks the tools called this way.
 - **The numbers are the gateway's, never the model's.** Calls, errors, latency and which tool
   answered on which attempt are counted where the calls are made. The outcome is arithmetic over
   those (every callable tool answered without an error at least once: success; some: partial;

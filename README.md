@@ -210,7 +210,13 @@ It reaches no network, and its runs stay out of the results that leave the box.
 anchor-lab bench -model gpt-oss-120b
 anchor-lab bench -model gemma-4-31b
 anchor-lab bench -compare
+anchor-lab bench -flips gpt-oss-120b,gemma-4-31b
 ```
+
+A bench goes through the set three times and counts a case as answered when it answers in two of
+them, steady when it answers in all three, and flaky when it answers in one or two. `-compare`
+ranks every model scored so far, and `-flips` lists the cases two models disagree on. `-runs`
+changes the number of passes for a bench run by hand with `-here`.
 
 `anchor-lab bench` run by you, not the lab's own user, asks the lab to run it: a request in its
 inbox, run by the harness as itself after the test in progress, so its files are the lab's. It

@@ -156,6 +156,18 @@ small, they use the standard library only, and they treat everything above as da
   to, and then its score says nothing. The repository has a sample of ten (`bench/set_sample.go`)
   with each kind of trouble, and a private set is a file built in with `-tags privatebench`
   (`build.sh`). The private set's version is what a score is compared under.
+- **A bench makes three passes, and a score says which cases changed.** A model answers the same
+  case differently from one pass to the next, so one pass can rank two models by luck. `anchor-lab
+  bench` goes through the set three times (`bench.DefaultRuns`, `-runs` for one run by hand): a case
+  counts as answered when it answers in two passes of the three, steady when it answers in all, and
+  flaky when it answers in some, which is its own finding. A trap tried in any pass counts, and the
+  tokens and time are one pass's, so a three-pass score compares with an older one-pass score
+  (read as one pass). `anchor-lab bench -flips a,b` lists the cases two models disagree on, since
+  two models with the same total rarely answer the same cases and the ones that changed say more
+  than the total. The reason, from Anthropic's article on folding subagents into one agent loop
+  (22 October 2026): when you compare two set-ups, look at which tasks flipped, and run each task
+  more than once, since a break there showed in one run of two. It costs three times the model's
+  time on the bench.
 - **The bench reaches no network.** Its servers run inside the harness and its sessions answer from
   them in memory (`gateway.OpenWith`, which only the bench may call, and a test holds the module to
   that). Its runs go to a journal of their own under `bench/`, so they never reach `results.ndjson`
@@ -270,6 +282,7 @@ real run, because the page should be shaped by what the results look like.
 | Targets from the listings alone, 14 November 2026 | 61 | `anchor-lab targets -data data` |
 | Bench cases: callable, traps, servers | 43, 7, 5 | `bench/cases.go`, version `anchor-lab-bench/1` |
 | Replies asked of the model on one bench server | 8 | `MaxTurns` in `benchCmd` |
+| Passes a bench makes over the set | 3 | `bench.DefaultRuns`, `-runs` by hand |
 | The language version a program is built as | Go 1.22 | `go.mod` written by `cell.Serve` |
 | One stats reading is served for | 5 s | `-fresh` on `anchor-lab stats` |
 | The site asks the box at most every, and waits | 10 s, 3 s | `labFresh`, `labTimeout` in `labstats.go` |

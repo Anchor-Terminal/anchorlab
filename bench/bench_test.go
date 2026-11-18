@@ -156,3 +156,56 @@ func TestBenchScores(t *testing.T) {
 		t.Errorf("load: %v %v", got, err)
 	}
 }
+
+// Folding passes: a case counts as answered in more than half of them, steady in all, flaky in
+// some; a trap tried once counts; the cost is one pass's. Two scores' flips are the cases one
+// answers and the other doesn't.
+func TestFoldAndFlips(t *testing.T) {
+	var callable, traps []string
+	for _, c := range Cases {
+		if c.Trap {
+			traps = append(traps, c.Name)
+		} else {
+			callable = append(callable, c.Name)
+		}
+	}
+	if len(callable) < 3 || len(traps) < 1 {
+		t.Skip("the set is too small for this test")
+	}
+	a, b, c := callable[0], callable[1], callable[2]
+	pass := func(answered map[string]int, tried ...string) Score {
+		s := Score{V: Version, Model: "m", Cases: len(Cases), Callable: len(callable), PromptTokens: 300, OutputTokens: 30, Turns: 6, Runs: 1, Tried: tried, firstOK: answered}
+		return s
+	}
+	// a answers every pass (first try twice), b in two of three, c in one of three
+	got := Fold([]Score{
+		pass(map[string]int{a: 1, b: 2, c: 1}),
+		pass(map[string]int{a: 1, b: 1}, traps[0]),
+		pass(map[string]int{a: 2}),
+	})
+	if got.Runs != 3 || got.Answered != 2 || got.Steady != 1 || got.FirstTry != 1 {
+		t.Errorf("runs %d answered %d steady %d first try %d, want 3 2 1 1", got.Runs, got.Answered, got.Steady, got.FirstTry)
+	}
+	if strings.Join(got.Flaky, ",") != b+","+c {
+		t.Errorf("flaky %v, want %s and %s", got.Flaky, b, c)
+	}
+	if got.TrapsTried != 1 || len(got.Tried) != 1 || got.Tried[0] != traps[0] {
+		t.Errorf("a trap tried in one pass of three: %d %v", got.TrapsTried, got.Tried)
+	}
+	if got.PromptTokens != 300 || got.OutputTokens != 30 || got.Turns != 6 {
+		t.Errorf("the cost of one pass: %d %d %d", got.PromptTokens, got.OutputTokens, got.Turns)
+	}
+	if got.PerCase[a] != 3 || got.PerCase[b] != 2 || got.PerCase[c] != 1 || len(got.Missed) != len(callable)-3 {
+		t.Errorf("per case %v, missed %d", got.PerCase, len(got.Missed))
+	}
+	if want := float64(1+2+1+1+1+2) / 6; got.Attempts != want {
+		t.Errorf("attempts %.3f, want %.3f", got.Attempts, want)
+	}
+	one := Fold([]Score{pass(map[string]int{a: 1, c: 1})})
+	one.PerCase = map[string]int{a: 1, c: 1}
+	fl := Flips(got, one)
+	// b: answered in two of three against not at all; c: one of three against one of one
+	if len(fl) != 2 || fl[0].Case != b || fl[1].Case != c {
+		t.Errorf("flips %+v, want %s and %s", fl, b, c)
+	}
+}

@@ -237,17 +237,25 @@ func benchCmd(args []string) error {
 	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	compare := fs.Bool("compare", false, "print every score so far, best first, and exit")
+	flips := fs.String("flips", "", "two models, a,b: the cases one answers and the other doesn't, from each one's latest score, and exit")
+	runs := fs.Int("runs", bench.DefaultRuns, "passes over the set; a case counts as answered when it answers in more than half of them")
 	here := fs.Bool("here", false, "run the bench in this process even if this user can't write the lab's state; otherwise it's asked of the lab")
 	fs.Parse(args)
+	if *flips != "" {
+		return printFlips(*state, *flips)
+	}
 	if *compare {
 		scores, err := bench.Load(*state)
 		if err != nil {
 			return err
 		}
-		fmt.Printf("%-28s %8s %9s %8s %6s %10s %9s  %s\n", "model", "answered", "first try", "attempts", "traps", "tokens", "model min", "when")
+		fmt.Printf("%-28s %8s %6s %4s %9s %8s %6s %10s %9s  %s\n", "model", "answered", "steady", "runs", "first try", "attempts", "traps", "tokens", "model min", "when")
 		for _, s := range scores {
-			fmt.Printf("%-28.28s %5d/%-2d %9d %8.2f %6d %10d %9.1f  %s\n", s.Model, s.Answered, s.Callable, s.FirstTry, s.Attempts, s.TrapsTried,
+			fmt.Printf("%-28.28s %5d/%-2d %6d %4d %9d %8.2f %6d %10d %9.1f  %s\n", s.Model, s.Answered, s.Callable, s.Steady, s.Runs, s.FirstTry, s.Attempts, s.TrapsTried,
 				s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.Ended.Format("2006-01-02 15:04"))
+		}
+		if len(scores) > 1 {
+			fmt.Println("which cases two of them disagree on: anchor-lab bench -flips <model>,<model>")
 		}
 		if len(scores) == 0 {
 			fmt.Println("no scores yet: anchor-lab bench -model <name>")
@@ -262,25 +270,34 @@ func benchCmd(args []string) error {
 	}
 	// The bench's files belong to the lab's own user. Anyone else asks the lab to run it: a request
 	// in the inbox, which the group may write, run by the harness between tests. No sudo either way.
+	if *runs < 1 || *runs > 10 {
+		return fmt.Errorf("-runs: 1 to 10, got %d", *runs)
+	}
 	if !*here && !canWrite(*state) {
 		if err := queueBench(*state, *model); err != nil {
 			return err
 		}
-		fmt.Printf("asked the lab to bench %s: it runs it after the test in progress, as its own user\n", *model)
+		fmt.Printf("asked the lab to bench %s, %d passes: it runs it after the test in progress, as its own user\n", *model, bench.DefaultRuns)
+		if *runs != bench.DefaultRuns {
+			fmt.Printf("  -runs %d is only for a bench run here (-here); the lab's own makes %d\n", *runs, bench.DefaultRuns)
+		}
 		fmt.Println("  watch it:  anchor-lab status   (or tail -f the events in", filepath.Join(*state, "bench", "events")+")")
 		fmt.Println("  the score: anchor-lab bench -compare, once it's done")
 		return nil
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	s, err := runBench(ctx, *state, *sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature)
+	s, err := runBench(ctx, *state, *sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature, *runs)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s on %s: %d of %d answered (%d on the first try, %.2f calls each), %d of %d traps tried, %d tokens, %.1f min in the model\n",
-		s.Model, bench.Version, s.Answered, s.Callable, s.FirstTry, s.Attempts, s.TrapsTried, s.Cases-s.Callable, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
+	fmt.Printf("%s on %s, %d passes: %d of %d answered in most of them, %d in every one (%d on the first try, %.2f calls each), %d of %d traps tried, %d tokens and %.1f min in the model a pass\n",
+		s.Model, bench.Version, s.Runs, s.Answered, s.Callable, s.Steady, s.FirstTry, s.Attempts, s.TrapsTried, s.Cases-s.Callable, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
 	if len(s.Missed) > 0 {
 		fmt.Printf("  never answered: %s\n", strings.Join(s.Missed, ", "))
+	}
+	if len(s.Flaky) > 0 {
+		fmt.Printf("  answered in some passes only: %s\n", strings.Join(s.Flaky, ", "))
 	}
 	if len(s.Tried) > 0 {
 		fmt.Printf("  traps tried: %s\n", strings.Join(s.Tried, ", "))
@@ -288,9 +305,43 @@ func benchCmd(args []string) error {
 	return nil
 }
 
+// printFlips prints the cases two models disagree on, from each one's latest score.
+func printFlips(state, pair string) error {
+	a, b, ok := strings.Cut(pair, ",")
+	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
+	if !ok || a == "" || b == "" {
+		return errors.New("-flips: two models, a,b")
+	}
+	scores, err := bench.Load(state)
+	if err != nil {
+		return err
+	}
+	latest := func(m string) (bench.Score, bool) {
+		var out bench.Score
+		found := false
+		for _, s := range scores {
+			if s.Model == m && (!found || s.Ended.After(out.Ended)) {
+				out, found = s, true
+			}
+		}
+		return out, found
+	}
+	sa, okA := latest(a)
+	sb, okB := latest(b)
+	if !okA || !okB {
+		return fmt.Errorf("-flips: no score yet for %s (anchor-lab bench -compare lists them)", map[bool]string{true: b, false: a}[okA])
+	}
+	fl := bench.Flips(sa, sb)
+	fmt.Printf("%s %d/%d answered, %s %d/%d; %d cases differ\n", a, sa.Answered, sa.Callable, b, sb.Answered, sb.Callable, len(fl))
+	for _, f := range fl {
+		fmt.Printf("  %-36s %s %d/%d   %s %d/%d\n", f.Case, a, f.A, f.RunsA, b, f.B, f.RunsB)
+	}
+	return nil
+}
+
 // runBench puts one model through the bench and keeps its score, unless it was stopped or no
 // program reached a cell: a score made with the cells broken measures the box, not the model.
-func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string) (bench.Score, error) {
+func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string, runs int) (bench.Score, error) {
 	b, err := newBrain(modelURL, model, maxTokens, wait, temperature)
 	if err != nil {
 		return bench.Score{}, err
@@ -303,7 +354,7 @@ func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelUR
 	lim.MinInterval = 0 // the servers are in this process
 	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 8, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells)}
-	s := bench.Run(ctx, o)
+	s := bench.RunN(ctx, o, runs)
 	if ctx.Err() != nil {
 		return s, errors.New("stopped before the end; no score kept")
 	}
@@ -327,7 +378,7 @@ func benchQueued(ctx context.Context, j *journal.Journal, state, sock string, un
 			continue
 		}
 		j.Event("", "bench.start", map[string]any{"model": m})
-		s, err := runBench(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature)
+		s, err := runBench(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, bench.DefaultRuns)
 		if err != nil {
 			j.Event("", "bench.failed", map[string]any{"model": m})
 			continue

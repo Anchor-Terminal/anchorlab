@@ -131,6 +131,20 @@ small, they use the standard library only, and they treat everything above as da
   log on the box, not only the lab's, to a person who already installed with sudo. A log file per
   service readable by the anchorlab group would be narrower, and would mean rotating files
   ourselves. Found on 18 November 2026, when the hint models/install.sh prints showed nothing.
+- **Variants: the same model, one setting changed, on the same questions.** Vlad, 18 November 2026,
+  on speculative decoding: "can we add benchmarks for speculative and non speculative and on
+  different temperatuires? same model, different settings, same evals", and "can we add the 4b as
+  well as the 8?". A variant is a preset named `<model>:<what changed>` (`qwen3.8-27b:q4`,
+  `:mtp`, `:t0.6`), so llama-server serves it like a model and the evaluation, the bench and the
+  queue need nothing new; `:` is a character every name check already takes, and it reads as a
+  tag. models.txt lists every file a variant loads, the shared ones too, so its size is what it
+  needs; `fetch.sh remove` keeps a file another model names, so removing a variant never takes its
+  model's weights. The first set is qwen3.8-27b's: the 4-bit build, Qwen's MTP heads and the DFlash
+  draft from the same ggml-org repository on each build, and temperature 0.6, because a dense model
+  that reads all 28.6 GB for each token is where a draft pays most and where the 7.6 tokens a
+  second we measured hurt most. Each variant keeps the publisher's sampling unless its name says
+  otherwise, so a difference in the score is the thing named. The Lab score stays the plain
+  model's, at the publisher's settings; a variant's scores are the comparison beside it.
 - **Removing and swapping a model needs no sudo.** "A command to remove a model and switch to a new
   one" (Vlad). `models/fetch.sh remove`, `swap` and `prune` work on the models folder as the user who
   downloads, and switching is `anchor-lab model use`, a file in the inbox, as before. `remove`

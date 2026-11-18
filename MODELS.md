@@ -217,7 +217,7 @@ Notes:
 ## 6. Picking one
 
 ```
-for m in $(awk '!/^#/ && NF {print $1}' models/models.txt | uniq); do
+for m in $(awk '!/^#/ && NF && $1 !~ /:/ {print $1}' models/models.txt | uniq); do
     anchor-lab eval -model "$m"
     anchor-lab bench -model "$m"
 done
@@ -242,14 +242,40 @@ Each model's runs are filed under its own folder, `research/<model>/...`, so swi
 two models' work. Bench them with the private set (`build.sh <file>`, README.md):
 the public sample is too small to pick a model on.
 
-## 7. Faster, optionally
+## 7. Variants: the same model, other settings
 
-Several of the ggml-org repositories also have small draft models for speculative decoding: `mtp-`
-files for multi-token prediction (Qwen, Gemma), `dflash-` files (Qwen, Gemma), and an `eagle3-`
-file for gpt-oss-120b. llama.cpp takes them with `spec-type` (`draft-mtp`, `draft-dflash`,
-`draft-eagle3`) and `model-draft` in a preset. We haven't measured them on this machine yet, and
-they aren't in `models.txt`: try one model at a time, and keep it only if the bench says it's
-faster with the same score.
+A variant is a model with one thing changed, named `<model>:<what changed>`, with its own section in
+`models/presets.ini` and its files in `models/models.txt`. The evaluation runs it like any model,
+so the score, the seconds a question and the tokens a second say what the change does, on the same
+questions. The site files a variant's scores under its model's listing; the Lab score stays the
+plain model's, at the publisher's settings.
+
+| Variant | Loads | What changes |
+| --- | --- | --- |
+| `qwen3.8-27b:q4` | Q4_K_M, 19.4 GB | the 4-bit build |
+| `qwen3.8-27b:mtp` | Q8_0 and `mtp-…Q8_0`, 31.8 GB | speculative decoding with Qwen's own multi-token prediction heads |
+| `qwen3.8-27b:dflash` | Q8_0 and `dflash-…Q8_0`, 30.7 GB | speculative decoding with the DFlash draft (incoai/Qwen3.8-27B-DFlash2) |
+| `qwen3.8-27b:q4-mtp` | Q4_K_M and `mtp-…Q4_0`, 21.1 GB | the 4-bit build with the MTP heads |
+| `qwen3.8-27b:q4-dflash` | Q4_K_M and `dflash-…Q4_0`, 20.5 GB | the 4-bit build with the DFlash draft |
+| `qwen3.8-27b:t0.6` | Q8_0, 28.6 GB | temperature 0.6, below the publisher's 1.0 |
+| `qwen3.8-27b:q4-mtp-t0.6` | Q4_K_M and `mtp-…Q4_0`, 21.1 GB | the 4-bit build, the MTP heads and temperature 0.6 |
+
+The drafts are ggml-org's, beside the model in `ggml-org/Qwen3.8-27B-GGUF`. A preset names the
+draft with `spec-draft-model`, and llama-server reads from the file which kind of draft it is
+(`draft-mtp` or `draft-dflash2`); `spec-type` is only needed for a draft in several files. A draft
+pays where the model is slow because it reads all its weights for every token, as the dense 27B
+does, and pays least on the MoE models, which read 3B to 10B a token already. It helps most on
+text a draft can guess (tool calls, names, text copied from a tool's answer) and least on free
+thinking, and a higher temperature lowers how many of its guesses are kept.
+
+```
+models/fetch.sh qwen3.8-27b:mtp          # downloads only the files that aren't here yet
+anchor-lab eval -model qwen3.8-27b:mtp
+models/fetch.sh remove qwen3.8-27b:mtp   # keeps the Q8_0 file, which qwen3.8-27b loads too
+```
+
+Another variant is a section and its lines, the same way: copy the model's section, change one
+thing, and name it after the change.
 
 ## When it doesn't work
 

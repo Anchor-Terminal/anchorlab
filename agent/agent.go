@@ -127,7 +127,7 @@ func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
 	ex := connect
 	ex.Task, ex.Model, ex.Started = "explore", o.Model, o.now().UTC()
 	sess.OnCall = func(c gateway.Call) {
-		j.Event(run, "call", map[string]any{"tool": c.Tool, "status": c.Status, "http": c.HTTP, "ms": c.Ms, "reqBytes": c.Req, "respBytes": c.Resp})
+		j.Event(run, "call", map[string]any{"tool": c.Tool, "status": c.Status, "http": c.HTTP, "ms": c.Ms, "reqBytes": c.Req, "respBytes": c.Resp, "dryRun": c.DryRun})
 	}
 	o.explore(ctx, run, sess, tools, &ex)
 	tally(&ex, tools, sess.Calls())
@@ -190,7 +190,7 @@ func tally(r *journal.Result, tools []gateway.Tool, calls []gateway.Call) {
 	callable := 0
 	for _, t := range tools {
 		ok, _ := gateway.Callable(t)
-		tr := journal.ToolResult{Name: t.Name, Refused: !ok}
+		tr := journal.ToolResult{Name: t.Name, Refused: !ok, DryRun: gateway.DryRun(t)}
 		if ok {
 			callable++
 		}
@@ -356,8 +356,11 @@ func describe(tools []gateway.Tool) string {
 		shown++
 		ok, why := gateway.Callable(t)
 		mark := "callable"
-		if !ok {
+		switch {
+		case !ok:
 			mark = "do not call (" + why + ")"
+		case gateway.DryRun(t):
+			mark = "callable, in a dry run: it changes something, so the lab always sends dryRun: true and it only says what it would do"
 		}
 		fmt.Fprintf(&b, "\n## %s [%s]\n%s\n", clip(t.Name, 96), mark, clip(strings.TrimSpace(t.Description), 500))
 		if ok && len(t.InputSchema) > 0 {

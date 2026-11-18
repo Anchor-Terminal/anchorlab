@@ -56,6 +56,35 @@ type Tool struct {
 		ReadOnly    *bool `json:"readOnlyHint,omitempty"`
 		Destructive *bool `json:"destructiveHint,omitempty"`
 	} `json:"annotations,omitempty"`
+	// Meta is the tool's _meta. The one key the lab reads is DryRunMeta.
+	Meta map[string]json.RawMessage `json:"_meta,omitempty"`
+}
+
+// DryRunMeta is how a tool says it takes a dry run (DESIGN.md, "A change tool is called only in a
+// dry run it declares"): "_meta": {"anchorterminal.com/dryRun": true}, and a boolean dryRun
+// argument in its input schema. Called with dryRun: true, it checks the call as it would for real
+// and answers with what it would have done, changing nothing. MCP has no dry run of its own.
+const DryRunMeta = "anchorterminal.com/dryRun"
+
+// DryRun says whether a tool the lab wouldn't otherwise call declares a dry run, so the lab can
+// call it with dryRun: true, which the gateway sets itself on every call.
+func DryRun(t Tool) bool {
+	if ok, _ := changePolicy(t); ok {
+		return false // a tool the lab calls anyway needs no dry run
+	}
+	var yes bool
+	if raw, ok := t.Meta[DryRunMeta]; !ok || json.Unmarshal(raw, &yes) != nil || !yes {
+		return false
+	}
+	var schema struct {
+		Properties map[string]struct {
+			Type string `json:"type"`
+		} `json:"properties"`
+	}
+	if json.Unmarshal(t.InputSchema, &schema) != nil {
+		return false
+	}
+	return schema.Properties["dryRun"].Type == "boolean"
 }
 
 var protocolDate = regexp.MustCompile(`^20[0-9]{2}-[0-9]{2}-[0-9]{2}$`)
@@ -67,6 +96,17 @@ var mutating = regexp.MustCompile(`(?i)(^|[_.\-/])(create|delete|remove|update|w
 
 // Callable says whether the lab calls this tool, and why not when it doesn't.
 func Callable(t Tool) (bool, string) {
+	if ok, why := changePolicy(t); !ok {
+		if DryRun(t) {
+			return true, ""
+		}
+		return false, why
+	}
+	return true, ""
+}
+
+// changePolicy is the rule for tools that change something, before any dry run is counted.
+func changePolicy(t Tool) (bool, string) {
 	if a := t.Annotations; a != nil {
 		if a.Destructive != nil && *a.Destructive {
 			return false, "the server marks it destructive"
@@ -97,6 +137,7 @@ type Call struct {
 	Ms     int
 	Req    int
 	Resp   int
+	DryRun bool // a change tool, called in the dry run it declares
 }
 
 // Reply is what the code gets back for a call.
@@ -456,6 +497,14 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 	var obj map[string]json.RawMessage
 	if json.Unmarshal(args, &obj) != nil {
 		return fail("refused", "the arguments have to be a JSON object")
+	}
+	if DryRun(t) {
+		// a change tool is only ever called in its dry run, set here whatever the program sent
+		if obj == nil {
+			obj = map[string]json.RawMessage{}
+		}
+		obj["dryRun"] = json.RawMessage("true")
+		c.DryRun = true
 	}
 	s.mu.Lock()
 	made, auths, oks := 0, 0, 0

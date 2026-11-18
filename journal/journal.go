@@ -85,6 +85,7 @@ type Result struct {
 type ToolResult struct {
 	Name     string `json:"name"`
 	Refused  bool   `json:"refused,omitempty"`
+	DryRun   bool   `json:"dryRun,omitempty"` // a change tool the lab called only in the dry run it declares
 	Calls    int    `json:"calls"`
 	OK       int    `json:"ok"`
 	Errors   int    `json:"errors"`

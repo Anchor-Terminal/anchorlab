@@ -348,3 +348,67 @@ func TestKeyedSession(t *testing.T) {
 		}
 	}
 }
+
+// A change tool is called only when it declares a dry run, in _meta and in its schema, and then
+// always with dryRun: true, whatever the program sent.
+func TestDryRun(t *testing.T) {
+	allowLoopback = true
+	defer func() { allowLoopback = false }()
+	var got []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+			Params struct {
+				Name      string          `json:"name"`
+				Arguments json.RawMessage `json:"arguments"`
+			} `json:"params"`
+		}
+		b, _ := io.ReadAll(r.Body)
+		json.Unmarshal(b, &req)
+		switch req.Method {
+		case "initialize":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"protocolVersion":"2025-06-18","serverInfo":{"name":"dry"}}}`, req.ID)
+		case "notifications/initialized":
+			w.WriteHeader(http.StatusAccepted)
+		case "tools/list":
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"tools":[
+				{"name":"post_note","annotations":{"readOnlyHint":false},"_meta":{"anchorterminal.com/dryRun":true},"inputSchema":{"type":"object","properties":{"text":{"type":"string"},"dryRun":{"type":"boolean"}}}},
+				{"name":"delete_note","annotations":{"destructiveHint":true},"_meta":{"anchorterminal.com/dryRun":true},"inputSchema":{"type":"object","properties":{"dryRun":{"type":"boolean"}}}},
+				{"name":"send_mail","_meta":{"anchorterminal.com/dryRun":true},"inputSchema":{"type":"object","properties":{"to":{"type":"string"}}}},
+				{"name":"create_thing","_meta":{"anchorterminal.com/dryRun":"yes"},"inputSchema":{"type":"object","properties":{"dryRun":{"type":"boolean"}}}}]}}`, req.ID)
+		case "tools/call":
+			got = append(got, req.Params.Name+" "+string(req.Params.Arguments))
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":{"content":[{"type":"text","text":"would have done it"}]}}`, req.ID)
+		}
+	}))
+	defer srv.Close()
+	lim := DefaultLimits
+	lim.MinInterval = 0
+	s, tools, err := Open(context.Background(), srv.URL, "anchor-lab/test", lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	want := map[string][2]bool{"post_note": {true, true}, "delete_note": {true, true}, "send_mail": {false, false}, "create_thing": {false, false}}
+	for _, tl := range tools {
+		ok, _ := Callable(tl)
+		if w := want[tl.Name]; ok != w[0] || DryRun(tl) != w[1] {
+			t.Errorf("%s: callable %v, dry run %v", tl.Name, ok, DryRun(tl))
+		}
+	}
+	ctx := context.Background()
+	if r := s.CallTool(ctx, "post_note", json.RawMessage(`{"text":"hi","dryRun":false}`)); !r.OK {
+		t.Errorf("post_note: %+v", r)
+	}
+	s.CallTool(ctx, "delete_note", nil)
+	if r := s.CallTool(ctx, "send_mail", json.RawMessage(`{"to":"x"}`)); r.OK {
+		t.Error("send_mail was called with no dryRun argument in its schema")
+	}
+	if len(got) != 2 || !strings.Contains(got[0], `"dryRun":true`) || strings.Contains(got[0], `"dryRun":false`) || !strings.Contains(got[1], `"dryRun":true`) {
+		t.Errorf("what the server got: %v", got)
+	}
+	if c := s.Calls(); !c[0].DryRun || !c[1].DryRun || c[2].DryRun {
+		t.Errorf("calls: %+v", c)
+	}
+}

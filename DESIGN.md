@@ -281,13 +281,21 @@ small, they use the standard library only, and they treat everything above as da
   stats count it from the eval journal without reading results. An evaluation runs for hours, so
   the stats read yesterday's events for one that started before midnight. The queue is words from
   a fixed list and model names that pass the same check as everywhere else.
+- **A pause stops the work at once.** Vlad, the same night: "i need it to pause even when it's mid
+  task, when i tell it to pause it drops, it does not wait to finish". The harness's work runs in
+  a context a pause cancels within five seconds of being asked for, mid-test or mid-question, while
+  the harness itself keeps running and waits the pause out. Nothing is lost but the piece in
+  progress: an evaluation carries on from its checkpoint, a bench's request stays in the inbox and
+  it runs again from the start, a retest queues the servers it hadn't reached, and a tool test a
+  pause cut short is tested again. The event says `eval.paused` or `bench.paused`, apart from a
+  stop, and `lately` says paused.
 - **A pause, for the night.** Vlad, 18 November 2026: "i need an option to pause it the lab since
   it's creating too much heat in the room overnight and people can't sleep, i want to pause it for 8
   hours as an option". `anchor-lab pause -for 8h` (8 hours unless told otherwise), or the Lab tab's
   button through the signed `pause` command, writes `inbox/pause` holding the time it ends;
   `anchor-lab pause -off` or the `resume` command removes it. The harness looks before each test,
-  each bench server and each evaluation question, finishes the one in progress and waits, then
-  goes on by itself where it stopped, with nothing to queue again. It's a file in the inbox like
+  each bench server and each evaluation question, and (the entry above) stops the one in
+  progress, then goes on by itself where it stopped, with nothing to queue again. It's a file in the inbox like
   every other request, so it needs no sudo. A pause is at most 24 hours, and a file further off
   than that, already past or not a time is no pause, so a mistake can't stop the lab for ever. The
   model's server stays up, idle: the heat is the work, and loading the model again in the morning

@@ -161,8 +161,12 @@ func run(args []string) error {
 		return *model
 	}
 	use(current())
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	root, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	// ctx is the work's: a pause in the inbox cancels it at once, mid-test or mid-question, and the
+	// loop below waits the pause out and carries on with a fresh one. root ends only with the harness.
+	ctx, cancelWork := pausable(root, *state)
+	defer func() { cancelWork(nil) }()
 
 	// when each server's last test with each model ended: switching the model tests every server
 	// again, filed under the new model
@@ -207,13 +211,16 @@ func run(args []string) error {
 					slugs = append(slugs, t.Slug)
 				}
 			}
-			for _, slug := range slugs {
+			for i, slug := range slugs {
 				t, ok := bySlug[slug]
 				if !ok {
 					skipped++
 					continue
 				}
 				if ctx.Err() != nil {
+					if root.Err() == nil { // a pause: the servers not tested yet wait for after it
+						journal.QueueRetest(*state, rq.Model, slugs[i:])
+					}
 					break
 				}
 				for _, r := range agent.Run(ctx, ro, t) {
@@ -227,7 +234,14 @@ func run(args []string) error {
 		}
 	}
 	j.Event("", "harness.start", map[string]any{"harness": version, "model": o.Model, "targets": *list})
-	for ctx.Err() == nil {
+	for root.Err() == nil {
+		if ctx.Err() != nil {
+			// a pause stopped the work: wait it out, then go on where it stopped (an evaluation from
+			// its checkpoint, a bench or a retest from its request, still in the inbox)
+			hold(root, j, *state)
+			ctx, cancelWork = pausable(root, *state)
+			continue
+		}
 		f, dropped, err := targets.Load(*list)
 		if err != nil {
 			j.Event("", "targets.failed", map[string]any{"why": err.Error()})
@@ -257,7 +271,9 @@ func run(args []string) error {
 			}
 			for _, r := range agent.Run(ctx, o, t) {
 				fmt.Printf("%s %-8s %s: %s, %s, %d tools, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, r.Status, r.Outcome, r.Tools, r.Calls, r.Errors)
-				last[key(t.Slug, o.Model)] = r.Ended
+				if ctx.Err() == nil { // a test a pause cut short is tested again after it
+					last[key(t.Slug, o.Model)] = r.Ended
+				}
 			}
 			tested++
 			sleep(ctx, *pause)
@@ -454,17 +470,19 @@ func benchQueued(ctx context.Context, j *journal.Journal, state, sock string, un
 		if ctx.Err() != nil {
 			return
 		}
-		os.Remove(files[i])
 		if !modelName.MatchString(m) {
+			os.Remove(files[i])
 			j.Event("", "bench.refused", map[string]any{"model": m})
 			continue
 		}
 		j.Event("", "bench.start", map[string]any{"model": m})
 		s, err := runBench(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, bench.DefaultRuns)
 		if err != nil && ctx.Err() != nil {
-			j.Event("", "bench.stopped", map[string]any{"model": m})
+			// a stop or a pause: the request stays, and the bench runs again from the start after
+			j.Event("", "bench."+stopWord(ctx), map[string]any{"model": m})
 			return
 		}
+		os.Remove(files[i])
 		if err != nil {
 			j.Event("", "bench.failed", map[string]any{"model": m})
 			continue

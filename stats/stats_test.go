@@ -317,6 +317,8 @@ func TestLately(t *testing.T) {
 		`{"t":"2026-11-17T05:30:01Z","run":"","ev":"harness.start","model":"x"}`,
 		`{"t":"2026-11-17T05:31:00Z","run":"","ev":"eval.start","model":"gemma-4-31b"}`,
 		`{"t":"2026-11-17T06:00:00Z","run":"","ev":"harness.start","model":"x"}`,
+		`{"t":"2026-11-17T06:00:30Z","run":"","ev":"eval.start","model":"gemma-4-31b"}`,
+		`{"t":"2026-11-17T06:00:40Z","run":"","ev":"eval.paused","model":"gemma-4-31b"}`,
 		`{"t":"2026-11-17T06:01:00Z","run":"","ev":"bench.start","model":"glm-4.7-flash"}`,
 		`{"t":"2026-11-17T06:02:00Z","run":"","ev":"bench.failed","model":"glm-4.7-flash"}`,
 	}, "\n")+"\n")
@@ -324,7 +326,7 @@ func TestLately(t *testing.T) {
 	for _, f := range Collect(c).Lately {
 		got = append(got, f.Kind+" "+f.Model+" "+f.How+" "+f.At.Format("15:04"))
 	}
-	want := []string{"bench glm-4.7-flash failed 06:02", "evaluate gemma-4-31b stopped 06:00", "evaluate qwen3.8-27b stopped 05:30", "evaluate gpt-oss-20b done 22:00"}
+	want := []string{"bench glm-4.7-flash failed 06:02", "evaluate gemma-4-31b paused 06:00", "evaluate gemma-4-31b stopped 06:00", "evaluate qwen3.8-27b stopped 05:30", "evaluate gpt-oss-20b done 22:00"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("lately:\n got %q\nwant %q", got, want)
 	}

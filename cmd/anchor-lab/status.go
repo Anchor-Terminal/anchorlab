@@ -154,7 +154,7 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 	fmt.Fprintf(w, "anchor-lab %s · %s · %d targets · %s\n\n", s.Harness, model, s.Targets, last)
 
 	if !s.PausedUntil.IsZero() {
-		fmt.Fprintf(w, "paused   until %s, after the test or question in progress (anchor-lab pause -off to go on now)\n", s.PausedUntil.Local().Format("Mon 15:04"))
+		fmt.Fprintf(w, "paused   until %s, then it goes on where it stopped (anchor-lab pause -off to go on now)\n", s.PausedUntil.Local().Format("Mon 15:04"))
 	}
 	if c := s.Current; c != nil {
 		stage := "connecting"
@@ -205,7 +205,7 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 			if i == 3 {
 				break
 			}
-			what := map[string]string{"done": "finished", "failed": "failed", "stopped": "stopped by a restart"}[f.How]
+			what := map[string]string{"done": "finished", "failed": "failed", "stopped": "stopped by a restart", "paused": "paused"}[f.How]
 			if f.Kind == "bench" {
 				what = "bench " + what
 			}

@@ -185,7 +185,7 @@ func evalQueued(ctx context.Context, j *journal.Journal, state, sock string, uns
 			// the harness is stopping, for a restart or an install: nothing wrong with the model. The
 			// request stays in the inbox, still the oldest, so the next start takes it first and
 			// carries on from the checkpoint.
-			j.Event("", "eval.stopped", map[string]any{"model": m})
+			j.Event("", "eval."+stopWord(ctx), map[string]any{"model": m})
 			return
 		}
 		os.Remove(files[i])

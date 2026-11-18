@@ -109,8 +109,8 @@ type Progress struct {
 	LastEvent   time.Time `json:"lastEvent"`
 }
 
-// Finished is one evaluation or bench that ended. Kind is evaluate or bench; How is done, failed
-// or stopped.
+// Finished is one evaluation or bench that ended. Kind is evaluate or bench; How is done, failed,
+// stopped (the harness stopping) or paused (it goes on after the pause).
 type Finished struct {
 	Kind  string    `json:"kind"`
 	Model string    `json:"model"`
@@ -397,7 +397,7 @@ func events(state string, t time.Time, s *Stats, finished finishedRuns) {
 			s.Started = e.T.UTC()
 			cur = nil
 			s.track(e)
-		case "eval.start", "eval.end", "eval.failed", "eval.stopped", "bench.start", "bench.end", "bench.failed", "bench.stopped":
+		case "eval.start", "eval.end", "eval.failed", "eval.stopped", "eval.paused", "bench.start", "bench.end", "bench.failed", "bench.stopped", "bench.paused":
 			s.track(e)
 		case "run.start":
 			s.Today.Runs++
@@ -840,7 +840,7 @@ func (s *Stats) track(e event) {
 			s.Lately = s.Lately[:lately]
 		}
 	}
-	how := map[string]string{"end": "done", "failed": "failed", "stopped": "stopped"}
+	how := map[string]string{"end": "done", "failed": "failed", "stopped": "stopped", "paused": "paused"}
 	kind, what, _ := strings.Cut(e.Ev, ".")
 	switch {
 	case e.Ev == "harness.start":

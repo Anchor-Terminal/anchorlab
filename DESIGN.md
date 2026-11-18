@@ -246,6 +246,13 @@ small, they use the standard library only, and they treat everything above as da
   carries code or an address: the servers to call still come from the public list, and a key only
   ever goes to the server it was sealed for. The service that takes the commands can store a
   sealed key and can't open one.
+- **The box signs what it tells the site.** With the command secret set, the stats, the results
+  and a transcript carry an HMAC over the version, the time, the path and the body. The stats are
+  where the site learns the box's public key, so an unsigned one would let another machine on the
+  local network hand the site its own key and collect every key sealed to it; signed, it can't. The
+  public half lives beside the private half in `/etc/anchor-lab`, root's folder, so no process
+  that reads strangers' text can change which key the site seals to. The fingerprint is printed by
+  `install.sh` and shown on the admin page, for a person to compare once.
 - **A run can be read from the admin page, and isn't kept there.** The transcripts used to be for
   a person on the box only. `GET /v1/run`, signed like a command, sends one run's tool list,
   programs, outputs, model replies and events, found from the run's own result line rather than a

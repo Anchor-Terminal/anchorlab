@@ -197,7 +197,7 @@ sits anywhere it can be read but this box:
 
 - `install.sh` makes the box a key pair once (`anchor-lab boxkey`). The private half is
   `/etc/anchor-lab/box.key`, root's alone, which systemd hands to the harness's service and nothing
-  else (`LoadCredential`). The public half is `/var/lib/anchor-lab/box.pub`, and the stats give it out.
+  else (`LoadCredential`). The public half is `/etc/anchor-lab/box.pub`, and the stats give it out.
 - The admin page fetches the public half and the admin's browser seals the key and how it's sent
   (a header, a query parameter, or an OAuth client's id and secret) to it, bound to the listing and
   its server's address (`seal/`). The site keeps only the sealed copy and the last four characters.
@@ -218,6 +218,9 @@ handed to the stats service by systemd). The site needs the same secret as
 `ANCHOR_LAB_CONTROL_SECRET`. A command more than a minute old, or sent twice, is refused, and each
 one only writes a file in the inbox, which the harness acts on as itself. Without the secret,
 commands are off and the stats answer as before.
+
+With the secret set, the box signs its answers too (the stats, the results, a transcript), so the
+site knows they came from the box: the stats carry the box's public key, which keys are sealed to.
 
 `GET /v1/run?id=<run>`, signed the same way, answers with a run's transcript: the tool list, each
 program, what it printed, the model's replies and the events. The site shows it to an admin and

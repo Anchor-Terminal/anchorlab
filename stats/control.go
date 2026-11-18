@@ -62,6 +62,29 @@ func Sign(secret []byte, unix int64, body []byte) string {
 	return hex.EncodeToString(m.Sum(nil))
 }
 
+// ResponseVersion is the first thing signed in an answer the box gives the site.
+const ResponseVersion = "anchor-lab-response/1"
+
+// SignAnswer is the signature on an answer: over the version, the time, the path and the body, with
+// the same secret as the commands, so the site knows the stats, the results, the box's public key
+// and a transcript came from the box and not from another machine on the network.
+func SignAnswer(secret []byte, unix int64, path string, body []byte) string {
+	m := hmac.New(sha256.New, secret)
+	m.Write([]byte(ResponseVersion + "\n" + strconv.FormatInt(unix, 10) + "\n" + path + "\n"))
+	m.Write(body)
+	return hex.EncodeToString(m.Sum(nil))
+}
+
+// signAnswer sets the signature headers on an answer, when there's a secret.
+func (sv *Server) signAnswer(w http.ResponseWriter, path string, body []byte) {
+	if len(sv.Secret) < 32 {
+		return
+	}
+	now := time.Now().Unix()
+	w.Header().Set("X-Anchor-Lab-Time", strconv.FormatInt(now, 10))
+	w.Header().Set("X-Anchor-Lab-Signature", SignAnswer(sv.Secret, now, path, body))
+}
+
 // sigEqual compares a signature sent with the one worked out, in constant time.
 func sigEqual(got, want string) bool {
 	g, err := hex.DecodeString(got)

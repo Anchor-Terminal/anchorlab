@@ -112,3 +112,29 @@ func TestCommands(t *testing.T) {
 		t.Errorf("no secret: %d", w.Code)
 	}
 }
+
+// With a secret, every answer to the site is signed: the stats (which carry the box's public key),
+// the results and a transcript. Another machine on the network can't stand in for the box.
+func TestAnswersSigned(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	k, _ := seal.NewKey()
+	pub := filepath.Join(t.TempDir(), "box.pub")
+	os.WriteFile(pub, []byte(seal.PublicKey(k.PublicKey())+"\n"), 0o640)
+	secret := []byte(strings.Repeat("s", 64))
+	sv := &Server{Config: Config{State: state, Root: state, BoxPub: pub}, Allow: []net.IP{net.ParseIP("192.168.1.100")}, Fresh: time.Second, Secret: secret}
+	for _, path := range []string{"/v1/stats", "/v1/results?after=0"} {
+		r := httptest.NewRequest("GET", path, nil)
+		r.RemoteAddr = "192.168.1.100:5000"
+		w := httptest.NewRecorder()
+		sv.ServeHTTP(w, r)
+		unix, _ := strconv.ParseInt(w.Header().Get("X-Anchor-Lab-Time"), 10, 64)
+		p, _, _ := strings.Cut(path, "?")
+		if w.Code != 200 || !sigEqual(w.Header().Get("X-Anchor-Lab-Signature"), SignAnswer(secret, unix, p, w.Body.Bytes())) {
+			t.Errorf("%s: %d, not signed right", path, w.Code)
+		}
+		if path == "/v1/stats" && !strings.Contains(w.Body.String(), seal.Fingerprint(k.PublicKey())) {
+			t.Errorf("the stats don't carry the box's key from %s", pub)
+		}
+	}
+}

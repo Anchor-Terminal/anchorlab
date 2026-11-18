@@ -75,10 +75,16 @@ func (sv *Server) transcript(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "no such run", http.StatusNotFound)
 		return
 	}
+	b, err := json.Marshal(t)
+	if err != nil {
+		http.Error(w, "transcript", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	json.NewEncoder(w).Encode(t)
+	sv.signAnswer(w, "/v1/run", b)
+	w.Write(b)
 }
 
 // readTranscript gathers a run from its result lines, its folder and its events.

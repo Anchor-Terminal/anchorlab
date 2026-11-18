@@ -33,10 +33,12 @@ install -d -o anchorlab -g anchorlab -m 2770 /var/lib/anchor-lab/inbox/keys
 install -d -o root -g anchorlab -m 0750 /etc/anchor-lab
 # The box's key pair (package seal): the private half readable by root alone and handed to the
 # harness's service by systemd (LoadCredential), the public half for the stats to give out, so the
-# admin's browser can seal a server's key to it. Made once; a box that has one keeps it.
-/usr/local/bin/anchor-lab boxkey -key /etc/anchor-lab/box.key -pub /var/lib/anchor-lab/box.pub
+# admin's browser can seal a server's key to it. Both in root's folder: nobody but root can change
+# which key the site seals to. Made once; a box that has one keeps it.
+/usr/local/bin/anchor-lab boxkey -key /etc/anchor-lab/box.key -pub /etc/anchor-lab/box.pub
 chown root:root /etc/anchor-lab/box.key && chmod 0600 /etc/anchor-lab/box.key
-chmod 0644 /var/lib/anchor-lab/box.pub
+chown root:anchorlab /etc/anchor-lab/box.pub && chmod 0640 /etc/anchor-lab/box.pub
+rm -f /var/lib/anchor-lab/box.pub # where an earlier build of this change put it
 # The secret the site signs its commands with, readable by root alone and handed to the stats
 # service by systemd. The site's server needs the same, as ANCHOR_LAB_CONTROL_SECRET.
 newsecret=""
@@ -100,7 +102,8 @@ echo "installed $(/usr/local/bin/anchor-lab version)"
 [ -z "$rules" ] || echo "  a sudo rule still names agent-run, for you to take out: $(echo $rules)"
 echo "  follow it:   tail -f /var/lib/anchor-lab/events/\$(date -u +%F).ndjson    (or journalctl -u anchor-lab -f)"
 echo "  how it goes: anchor-lab status   (no sudo once you're in the anchorlab group)"
-echo "  the box's key: $(cut -c1-16 /var/lib/anchor-lab/box.pub)…, sealed keys go to it from the admin page"
+echo "  the box's key: $(/usr/local/bin/anchor-lab boxkey -key /etc/anchor-lab/box.key -pub /etc/anchor-lab/box.pub | sed 's/.*: //')"
+echo "    the admin page's Lab tab shows the same fingerprint beside \"Keys we hold\": check they match"
 [ -z "$operator" ] || echo "  added $operator to the anchorlab group: log in again, and the lab needs no sudo from then on"
 echo
 echo "Still to do by hand, once (README.md has each line):"

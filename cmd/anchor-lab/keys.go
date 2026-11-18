@@ -21,11 +21,11 @@ import (
 // half goes where only root reads it and systemd hands it to the harness's service alone, the
 // public half where the stats service gives it out.
 //
-//	anchor-lab boxkey -key /etc/anchor-lab/box.key -pub /var/lib/anchor-lab/box.pub
+//	anchor-lab boxkey -key /etc/anchor-lab/box.key -pub /etc/anchor-lab/box.pub
 func boxKeyCmd(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("boxkey", flag.ExitOnError)
 	keyPath := fs.String("key", "/etc/anchor-lab/box.key", "the private half, readable by its owner alone")
-	pubPath := fs.String("pub", "/var/lib/anchor-lab/box.pub", "the public half, readable by anyone")
+	pubPath := fs.String("pub", "/etc/anchor-lab/box.pub", "the public half, for the stats to give out: in root's folder, so only root can change which key the site seals to")
 	fs.Parse(args)
 	if k, err := seal.LoadKey(*keyPath); err == nil {
 		// there already: write the public half again in case it went, and say which key it is

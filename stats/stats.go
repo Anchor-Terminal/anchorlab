@@ -10,6 +10,7 @@ package stats
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"io"
 	"net"
@@ -154,6 +155,7 @@ type Config struct {
 	Model    string   // ANCHOR_LAB_MODEL
 	ModelURL string   // ANCHOR_LAB_MODEL_URL; /health beside it is asked, on this machine only
 	Harness  string   // this binary's version
+	BoxPub   string   // the box's public key, /etc/anchor-lab/box.pub: root's to write; "" is <State>/box.pub
 	Root     string   // "" in use; a folder standing in for / in tests (proc, sys)
 	Now      func() time.Time
 }
@@ -217,7 +219,7 @@ func Collect(c Config) Stats {
 		up := modelUp(c.ModelURL)
 		s.ModelUp = &up
 	}
-	s.Box, s.Keys = boxKey(c.State), keysHeld(c.State)
+	s.Box, s.Keys = boxKey(c), keysHeld(c.State)
 	if c.Root == "" { // not in tests, which have no model server
 		s.Models = modelList(c.ModelURL)
 	}
@@ -483,8 +485,12 @@ type KeyHeld struct {
 	Added time.Time `json:"added"`
 }
 
-func boxKey(state string) *Box {
-	b, err := os.ReadFile(filepath.Join(state, "box.pub"))
+func boxKey(c Config) *Box {
+	p := c.BoxPub
+	if p == "" {
+		p = filepath.Join(c.State, "box.pub")
+	}
+	b, err := os.ReadFile(p)
 	if err != nil {
 		return nil
 	}
@@ -607,7 +613,7 @@ type Server struct {
 
 // boxFingerprint is the fingerprint of the box's public key, "" when install.sh hasn't made it.
 func (sv *Server) boxFingerprint() string {
-	if b := boxKey(sv.Config.State); b != nil {
+	if b := boxKey(sv.Config); b != nil {
 		return b.Fingerprint
 	}
 	return ""
@@ -673,6 +679,7 @@ func (sv *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	sv.signAnswer(w, "/v1/stats", b)
 	w.Write(b)
 }
 
@@ -689,10 +696,16 @@ func (sv *Server) results(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "after: a line number", http.StatusBadRequest)
 		return
 	}
+	var buf bytes.Buffer
+	if err := journal.Export(sv.Config.State, after, ResultsPage, &buf); err != nil {
+		http.Error(w, "results", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	journal.Export(sv.Config.State, after, ResultsPage, w)
+	sv.signAnswer(w, "/v1/results", buf.Bytes())
+	w.Write(buf.Bytes())
 }
 
 // Listen checks the address it's given: a real address of this machine, never every interface,

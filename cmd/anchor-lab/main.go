@@ -668,7 +668,7 @@ func statsCmd(args []string) error {
 		secret = nil
 	}
 	sv := &stats.Server{Allow: ips, Fresh: *fresh, Secret: secret, Config: stats.Config{State: *state, Disks: ds, Model: os.Getenv("ANCHOR_LAB_MODEL"),
-		ModelURL: os.Getenv("ANCHOR_LAB_MODEL_URL"), Harness: version}}
+		ModelURL: os.Getenv("ANCHOR_LAB_MODEL_URL"), Harness: version, BoxPub: envOr("ANCHOR_LAB_BOX_PUB", "/etc/anchor-lab/box.pub")}}
 	hs := &http.Server{Handler: sv, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 20 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 8 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

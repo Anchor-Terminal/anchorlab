@@ -112,18 +112,26 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 	if turns <= 0 {
 		turns = EitherTurns
 	}
+	hinted := false
 	for turn := 1; turn <= turns && ctx.Err() == nil; turn++ {
 		start := time.Now()
 		reply, usage, err := tb.ChatTools(ctx, msgs, offered)
-		if err != nil && turn == 1 && offered != nil && ctx.Err() == nil {
-			// a model server whose chat template takes no tools refuses the request: the task
-			// carries on with programs only, and the score counts it, so a model isn't marked down
-			// for its server
-			offered, r.NoTools = nil, true
-			j.Event(run, "model.notools", map[string]any{"turn": turn})
+		if err != nil && offered != nil && ctx.Err() == nil {
+			// a request with tools failed: once more with them, since a malformed tool call is
+			// often bad luck in the sampling; then the task carries on with programs only, the
+			// conversation so far as plain text, so the model still gets to the answer. A model
+			// server whose chat template takes no tools lands here on the first turn. The score
+			// counts it, so a model isn't marked down for its server.
 			var more brain.Usage
-			reply, more, err = tb.ChatTools(ctx, msgs, nil)
-			usage.PromptTokens, usage.OutputTokens = usage.PromptTokens+more.PromptTokens, usage.OutputTokens+more.OutputTokens
+			j.Event(run, "model.retry", map[string]any{"turn": turn})
+			reply, more, err = tb.ChatTools(ctx, msgs, offered)
+			usage = addUsage(usage, more)
+			if err != nil && ctx.Err() == nil {
+				offered, r.NoTools, msgs = nil, true, plain(msgs)
+				j.Event(run, "model.notools", map[string]any{"turn": turn})
+				reply, more, err = tb.ChatTools(ctx, msgs, nil)
+				usage = addUsage(usage, more)
+			}
 		}
 		r.Turns = turn
 		r.ModelMs += time.Since(start).Milliseconds()
@@ -187,6 +195,12 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 					reply = sess.CallTool(ctx, c.Function.Name, args)
 				}
 				out = nativeAnswer(reply)
+				if !reply.OK && !hinted {
+					// once a task: the same call works from a program, which some models get right
+					// where their own tool calls don't
+					hinted = true
+					out += "\n(The same call can be made from a program: run_program, with tool.Call(\"" + programName(c.Function.Name) + "\", args).)"
+				}
 			}
 			msgs = append(msgs, brain.Message{Role: "tool", ToolCallID: c.ID, Content: out})
 		}
@@ -259,4 +273,51 @@ func path(r TaskResult) string {
 		return "program"
 	}
 	return "none"
+}
+
+func addUsage(a, b brain.Usage) brain.Usage {
+	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens}
+}
+
+// programName is a tool's name as a program calls it: lab_fetch is lab.fetch there.
+func programName(native string) string {
+	if native == nativeFetch {
+		return FetchTool
+	}
+	return native
+}
+
+// plain is the conversation with its tool calls and their answers written as text, for a model
+// server that takes no tools: what was called and what came back are still there to read.
+func plain(msgs []brain.Message) []brain.Message {
+	out := make([]brain.Message, 0, len(msgs))
+	names := map[string]string{}
+	for _, m := range msgs {
+		switch {
+		case m.Role == "assistant" && len(m.ToolCalls) > 0:
+			var b strings.Builder
+			b.WriteString(m.Content)
+			for _, c := range m.ToolCalls {
+				names[c.ID] = c.Function.Name
+				fmt.Fprintf(&b, "\n[I called %s with %s]", c.Function.Name, c.Function.Arguments)
+			}
+			out = append(out, brain.Message{Role: "assistant", Content: strings.TrimSpace(b.String())})
+		case m.Role == "tool":
+			out = append(out, brain.Message{Role: "user", Content: "What " + names[m.ToolCallID] + " returned:\n" + m.Content})
+		default:
+			out = append(out, brain.Message{Role: m.Role, Content: m.Content})
+		}
+	}
+	// tool calls aren't offered any more: say how to carry on
+	out = append(out, brain.Message{Role: "user", Content: "Tool calls aren't available from here on. Carry on with programs: reply with one go block holding a complete program that calls the tools with tool.Call (lab_fetch is lab.fetch there), or with ANSWER: <the answer>."})
+	// some chat templates refuse two turns of the same role in a row, so those are joined
+	joined := out[:0]
+	for _, m := range out {
+		if n := len(joined); n > 0 && joined[n-1].Role == m.Role && m.Role != "system" {
+			joined[n-1].Content += "\n\n" + m.Content
+			continue
+		}
+		joined = append(joined, m)
+	}
+	return joined
 }

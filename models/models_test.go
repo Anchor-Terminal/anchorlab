@@ -11,6 +11,10 @@ func TestSizes(t *testing.T) {
 	if s["qwen3.5-122b-a10b"] != 40007829376+34200410816 {
 		t.Errorf("qwen3.5-122b-a10b, two files: %d", s["qwen3.5-122b-a10b"])
 	}
+	// a variant counts every file it loads, the one it shares with its model too
+	if s["qwen3.8-27b:mtp"] != 28595763840+3164006976 || s["qwen3.8-27b:t0.6"] != s["qwen3.8-27b"] {
+		t.Errorf("variants: mtp %d, t0.6 %d", s["qwen3.8-27b:mtp"], s["qwen3.8-27b:t0.6"])
+	}
 	if len(s) < 20 {
 		t.Errorf("only %d models", len(s))
 	}

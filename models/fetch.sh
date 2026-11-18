@@ -66,9 +66,16 @@ remove() {
         fi
     done
     local freed=0
+    local gone=" $* "
     for n in "$@"; do
         while read -r name folder repo file bytes sha; do
             path="$MODELS/$folder/$file"
+            # a file another model in the list loads stays (a variant shares its model's file)
+            keep="$(rows | awk -v f="$folder/$file" -v gone="$gone" '($2 "/" $4) == f && index(gone, " " $1 " ") == 0 {print $1; exit}')"
+            if [ -n "$keep" ]; then
+                echo "$name: kept $file, which $keep loads too"
+                continue
+            fi
             if [ -f "$path" ]; then freed=$((freed + $(stat -c %s "$path"))); fi
             rm -f -- "$path" "$path.sha256"
             echo "$name: deleted $file"

@@ -44,7 +44,7 @@ echo
 echo "llama-server: $(/usr/local/bin/llama-server --version 2>&1 | head -n1)"
 echo "  models: $MODELS, presets: /etc/llama/models.ini (from ${presets#$here/../})"
 missing=""
-while read -r path; do [ -f "$path" ] || missing="$missing $(basename "$path")"; done < <(sed -n 's/^model = //p' /etc/llama/models.ini)
+while read -r path; do [ -f "$path" ] || missing="$missing $(basename "$path")"; done < <(sed -n 's/^\(model\|spec-draft-model\) = //p' /etc/llama/models.ini | sort -u)
 [ -z "$missing" ] || echo "  not downloaded yet:$missing (models/fetch.sh)"
 echo "  the list: curl -s http://127.0.0.1:8080/models"
 echo "  follow it: journalctl -u llama-server -f"

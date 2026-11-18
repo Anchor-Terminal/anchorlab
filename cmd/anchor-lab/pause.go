@@ -11,6 +11,40 @@ import (
 	"github.com/Anchor-Terminal/anchorlab/journal"
 )
 
+// errPaused is why the work stops when a pause is asked for.
+var errPaused = errors.New("paused")
+
+// pausable is a context for the work that a pause in the inbox cancels, at once if one is there
+// already, otherwise within five seconds of it being asked for.
+func pausable(root context.Context, state string) (context.Context, context.CancelCauseFunc) {
+	ctx, cancel := context.WithCancelCause(root)
+	go func() {
+		t := time.NewTicker(5 * time.Second)
+		defer t.Stop()
+		for {
+			if _, ok := journal.PausedUntil(state, time.Now()); ok {
+				cancel(errPaused)
+				return
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+			}
+		}
+	}()
+	return ctx, cancel
+}
+
+// stopWord is how a piece of work that ended early ended: "paused" for a pause, "stopped" when
+// the harness is stopping.
+func stopWord(ctx context.Context) string {
+	if errors.Is(context.Cause(ctx), errPaused) {
+		return "paused"
+	}
+	return "stopped"
+}
+
 // hold waits out a pause asked for in the inbox (journal.Pause), between two tests or two
 // questions, and writes down when it began and ended. The model's server stays up and idle, so
 // the work goes on where it stopped.
@@ -52,7 +86,7 @@ func pauseCmd(args []string, w io.Writer) error {
 	if err := journal.Pause(*state, until); err != nil {
 		return fmt.Errorf("couldn't pause it: %w (are you in the anchorlab group?)", err)
 	}
-	fmt.Fprintf(w, "the lab pauses until %s, once the test or question in progress is done (a few minutes at most)\n", until.Local().Format("Mon 15:04"))
+	fmt.Fprintf(w, "the lab pauses until %s, within 5 seconds: what's in progress stops and goes on after\n", until.Local().Format("Mon 15:04"))
 	fmt.Fprintln(w, "  go on sooner: anchor-lab pause -off")
 	return nil
 }

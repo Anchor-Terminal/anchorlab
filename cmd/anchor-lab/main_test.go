@@ -118,10 +118,10 @@ func TestHold(t *testing.T) {
 	if time.Since(start) > time.Second {
 		t.Fatal("waited with no pause")
 	}
-	journal.Pause(state, time.Now().Add(1500*time.Millisecond))
+	journal.Pause(state, time.Now().Add(2*time.Second)) // kept to the second, so 1 to 2 s from now
 	hold(context.Background(), j, state)
-	if d := time.Since(start); d < time.Second || d > 5*time.Second {
-		t.Errorf("waited %v for a pause of 1.5 s", d)
+	if d := time.Since(start); d < 900*time.Millisecond || d > 5*time.Second {
+		t.Errorf("waited %v for a pause of 2 s", d)
 	}
 	if _, err := os.Stat(filepath.Join(state, "inbox", "pause")); !os.IsNotExist(err) {
 		t.Error("the pause file is still there")
@@ -137,5 +137,34 @@ func TestHold(t *testing.T) {
 	hold(ctx, j, state)
 	if time.Since(start) > 3*time.Second {
 		t.Error("a stop didn't end the wait")
+	}
+}
+
+// A pause cancels the work's context at once, and says so, while the harness's own goes on; with
+// no pause the work goes on.
+func TestPausable(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	root, stop := context.WithCancel(context.Background())
+	defer stop()
+	ctx, cancel := pausable(root, state)
+	time.Sleep(100 * time.Millisecond)
+	if ctx.Err() != nil {
+		t.Fatal("cancelled with no pause")
+	}
+	cancel(nil)
+	if stopWord(ctx) != "stopped" {
+		t.Errorf("a plain stop: %q", stopWord(ctx))
+	}
+	journal.Pause(state, time.Now().Add(time.Hour))
+	ctx, cancel = pausable(root, state)
+	defer cancel(nil)
+	select {
+	case <-ctx.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("a pause didn't cancel the work")
+	}
+	if stopWord(ctx) != "paused" || root.Err() != nil {
+		t.Errorf("after a pause: %q, root %v", stopWord(ctx), root.Err())
 	}
 }

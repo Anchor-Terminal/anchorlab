@@ -302,3 +302,30 @@ func TestQueue(t *testing.T) {
 		t.Errorf("queue:\n got %+v\nwant %+v", got, want)
 	}
 }
+
+// How each evaluation ended: a restart while one runs is a stop, logged or not, and a stop isn't
+// a failure.
+func TestLately(t *testing.T) {
+	c, _ := fixture(t)
+	write(t, filepath.Join(c.State, "events", "2026-11-16.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-16T20:00:00Z","run":"","ev":"eval.start","model":"gpt-oss-20b"}`,
+		`{"t":"2026-11-16T22:00:00Z","run":"","ev":"eval.end","model":"gpt-oss-20b"}`,
+	}, "\n")+"\n")
+	write(t, filepath.Join(c.State, "events", "2026-11-17.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-17T05:00:00Z","run":"","ev":"eval.start","model":"qwen3.8-27b"}`,
+		`{"t":"2026-11-17T05:30:00Z","run":"","ev":"eval.stopped","model":"qwen3.8-27b"}`,
+		`{"t":"2026-11-17T05:30:01Z","run":"","ev":"harness.start","model":"x"}`,
+		`{"t":"2026-11-17T05:31:00Z","run":"","ev":"eval.start","model":"gemma-4-31b"}`,
+		`{"t":"2026-11-17T06:00:00Z","run":"","ev":"harness.start","model":"x"}`,
+		`{"t":"2026-11-17T06:01:00Z","run":"","ev":"bench.start","model":"glm-4.7-flash"}`,
+		`{"t":"2026-11-17T06:02:00Z","run":"","ev":"bench.failed","model":"glm-4.7-flash"}`,
+	}, "\n")+"\n")
+	var got []string
+	for _, f := range Collect(c).Lately {
+		got = append(got, f.Kind+" "+f.Model+" "+f.How+" "+f.At.Format("15:04"))
+	}
+	want := []string{"bench glm-4.7-flash failed 06:02", "evaluate gemma-4-31b stopped 06:00", "evaluate qwen3.8-27b stopped 05:30", "evaluate gpt-oss-20b done 22:00"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("lately:\n got %q\nwant %q", got, want)
+	}
+}

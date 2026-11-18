@@ -457,6 +457,10 @@ func benchQueued(ctx context.Context, j *journal.Journal, state, sock string, un
 		}
 		j.Event("", "bench.start", map[string]any{"model": m})
 		s, err := runBench(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, bench.DefaultRuns)
+		if err != nil && ctx.Err() != nil {
+			j.Event("", "bench.stopped", map[string]any{"model": m})
+			return
+		}
 		if err != nil {
 			j.Event("", "bench.failed", map[string]any{"model": m})
 			continue

@@ -140,6 +140,11 @@ func evalQueued(ctx context.Context, j *journal.Journal, state, sock string, uns
 		}
 		j.Event("", "eval.start", map[string]any{"model": m})
 		s, err := runEval(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, eval.DefaultRuns)
+		if err != nil && ctx.Err() != nil {
+			// the harness is stopping, for a restart or an install: nothing wrong with the model
+			j.Event("", "eval.stopped", map[string]any{"model": m})
+			return
+		}
 		if err != nil {
 			j.Event("", "eval.failed", map[string]any{"model": m})
 			continue

@@ -192,6 +192,21 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 		fmt.Fprintf(w, "waiting  %s\n", strings.Join(q, " · "))
 	}
 
+	if len(s.Lately) > 0 {
+		var l []string
+		for i, f := range s.Lately {
+			if i == 3 {
+				break
+			}
+			what := map[string]string{"done": "finished", "failed": "failed", "stopped": "stopped by a restart"}[f.How]
+			if f.Kind == "bench" {
+				what = "bench " + what
+			}
+			l = append(l, fmt.Sprintf("%s %s %s", f.Model, what, ago(now, f.At)))
+		}
+		fmt.Fprintf(w, "lately   %s\n", strings.Join(l, " · "))
+	}
+
 	d := s.Today
 	explored := d.Outcomes["success"] + d.Outcomes["partial"] + d.Outcomes["failure"] + d.Outcomes["none"]
 	fmt.Fprintf(w, "today    %s (%d opened, %d didn't) · %d explored: %d every tool, %d some, %d none, %d want a key to call\n",

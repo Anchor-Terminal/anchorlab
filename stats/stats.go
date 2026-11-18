@@ -56,6 +56,9 @@ type Stats struct {
 	Evaluating string    `json:"evaluating,omitempty"` // the model the harness is evaluating now (package eval)
 	// Progress is how far the evaluation in progress has got, nil when there's none
 	Progress *Progress `json:"progress,omitempty"`
+	// Lately is how the latest evaluations and benches ended, newest first, today's and
+	// yesterday's: done, failed, or stopped by the harness starting again
+	Lately []Finished `json:"lately"`
 	// Queue is what's waiting in the inbox, in the order the harness takes it: retests, then
 	// benches, then evaluations
 	Queue   []Queued `json:"queue"`
@@ -100,6 +103,18 @@ type Progress struct {
 	Unreachable int       `json:"unreachable"`
 	LastEvent   time.Time `json:"lastEvent"`
 }
+
+// Finished is one evaluation or bench that ended. Kind is evaluate or bench; How is done, failed
+// or stopped.
+type Finished struct {
+	Kind  string    `json:"kind"`
+	Model string    `json:"model"`
+	At    time.Time `json:"at"`
+	How   string    `json:"how"`
+}
+
+// lately is how many endings the stats carry.
+const lately = 10
 
 // Queued is one request waiting in the inbox. Kind is evaluate, bench or retest; Servers is how
 // many a retest names, 0 for every server.
@@ -223,7 +238,7 @@ func Collect(c Config) Stats {
 		now = c.Now
 	}
 	t := now().UTC()
-	s := Stats{V: Version, At: t, Harness: c.Harness, Today: Today{Outcomes: map[string]int{}, Statuses: map[string]int{}}, Recent: []Result{}}
+	s := Stats{V: Version, At: t, Harness: c.Harness, Today: Today{Outcomes: map[string]int{}, Statuses: map[string]int{}}, Recent: []Result{}, Lately: []Finished{}}
 	model := c.Model
 	if m, ok := journal.InboxModel(c.State); ok {
 		model = m
@@ -354,19 +369,9 @@ func events(state string, t time.Time, s *Stats, finished finishedRuns) {
 		case "harness.start":
 			s.Started = e.T.UTC()
 			cur = nil
-			s.Benching, s.Evaluating = "", ""
-		case "eval.start":
-			if modelOK.MatchString(e.Model) {
-				s.Evaluating = e.Model
-			}
-		case "eval.end", "eval.failed":
-			s.Evaluating = ""
-		case "bench.start":
-			if modelOK.MatchString(e.Model) {
-				s.Benching = e.Model
-			}
-		case "bench.end", "bench.failed":
-			s.Benching = ""
+			s.track(e)
+		case "eval.start", "eval.end", "eval.failed", "eval.stopped", "bench.start", "bench.end", "bench.failed", "bench.stopped":
+			s.track(e)
 		case "run.start":
 			s.Today.Runs++
 			cur = nil
@@ -788,22 +793,45 @@ func busy(state string, day time.Time, s *Stats) {
 		if json.Unmarshal(sc.Bytes(), &e) != nil {
 			continue
 		}
-		switch e.Ev {
-		case "harness.start":
-			s.Benching, s.Evaluating = "", ""
-		case "eval.start":
-			if modelOK.MatchString(e.Model) {
-				s.Evaluating = e.Model
-			}
-		case "eval.end", "eval.failed":
-			s.Evaluating = ""
-		case "bench.start":
-			if modelOK.MatchString(e.Model) {
-				s.Benching = e.Model
-			}
-		case "bench.end", "bench.failed":
-			s.Benching = ""
+		if e.T.IsZero() {
+			continue
 		}
+		s.track(e)
+	}
+}
+
+// track follows what the harness is busy with between tests, from one event: the evaluation or
+// bench it started, and how each one ended, newest first in Lately. A harness that starts again
+// while one was running stopped it, whatever the events before say.
+func (s *Stats) track(e event) {
+	finish := func(kind, model, how string) {
+		if model == "" {
+			return
+		}
+		s.Lately = append([]Finished{{Kind: kind, Model: model, At: e.T.UTC(), How: how}}, s.Lately...)
+		if len(s.Lately) > lately {
+			s.Lately = s.Lately[:lately]
+		}
+	}
+	how := map[string]string{"end": "done", "failed": "failed", "stopped": "stopped"}
+	kind, what, _ := strings.Cut(e.Ev, ".")
+	switch {
+	case e.Ev == "harness.start":
+		finish("evaluate", s.Evaluating, "stopped")
+		finish("bench", s.Benching, "stopped")
+		s.Benching, s.Evaluating = "", ""
+	case what == "start" && modelOK.MatchString(e.Model):
+		if kind == "eval" {
+			s.Evaluating = e.Model
+		} else {
+			s.Benching = e.Model
+		}
+	case how[what] != "" && kind == "eval":
+		finish("evaluate", s.Evaluating, how[what])
+		s.Evaluating = ""
+	case how[what] != "" && kind == "bench":
+		finish("bench", s.Benching, how[what])
+		s.Benching = ""
 	}
 }
 

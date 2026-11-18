@@ -257,6 +257,14 @@ small, they use the standard library only, and they treat everything above as da
   stats count it from the eval journal without reading results. An evaluation runs for hours, so
   the stats read yesterday's events for one that started before midnight. The queue is words from
   a fixed list and model names that pass the same check as everywhere else.
+- **A stop isn't a failure.** On 18 November 2026 an install stopped qwen3.8-27b's evaluation part
+  way, and the log called it `eval.failed`, the same as a model that broke. Vlad agreed it should
+  say so: "yeah, we should do that". When the harness is stopping (a restart or an install), an
+  evaluation or a bench that ends early logs `eval.stopped` or `bench.stopped`, and the harness
+  takes no more requests. The stats carry the latest endings, done, failed or stopped, newest first
+  in `lately`, and a harness that starts again while one was running counts it as stopped even
+  when nothing was logged. `anchor-lab status` prints the latest three, so the model to queue again
+  is in front of whoever installed.
 - **Time is part of the benchmark, as its own number.** Vlad, 18 November 2026: "we should record
   everything and the time taken should be part of our benchmark", and asked whether time should
   count inside the Lab score or beside it, beside it. A score carries the seconds a question takes

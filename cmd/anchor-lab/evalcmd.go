@@ -75,8 +75,8 @@ func evalCmd(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s on %s, %d passes: %d of %d right (%.1f%%), %d steady; by level %d/%d, %d/%d, %d/%d; %d calls to a tool it was told to leave alone; %d tokens and %.1f min in the model a pass\n",
-		s.Model, eval.Version, s.Runs, s.Correct, s.Scored, s.Pct, s.Steady, s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3],
+	fmt.Printf("%s on %s, %d passes: Lab score %d; %d of %d right (%.1f%%), %d steady; by level %d/%d, %d/%d, %d/%d; %d calls to a tool it was told to leave alone; %d tokens and %.1f min in the model a pass\n",
+		s.Model, eval.Version, s.Runs, s.Points, s.Correct, s.Scored, s.Pct, s.Steady, s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3],
 		s.Forbidden, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
 	if len(s.Wrong) > 0 {
 		fmt.Printf("  wrong: %s\n", strings.Join(s.Wrong, ", "))
@@ -157,9 +157,9 @@ func evalCompare(state string) error {
 		fmt.Println("no scores yet: anchor-lab eval -model <name>")
 		return nil
 	}
-	fmt.Printf("%-28s %7s %6s %6s %8s %8s %8s %5s %10s %9s  %s\n", "model", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "when")
+	fmt.Printf("%-28s %5s %7s %6s %6s %8s %8s %8s %5s %10s %9s  %s\n", "model", "score", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "when")
 	for _, s := range scores {
-		fmt.Printf("%-28.28s %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f  %s\n", s.Model, s.Correct, s.Scored, s.Pct, s.Steady,
+		fmt.Printf("%-28.28s %5d %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f  %s\n", s.Model, s.Points, s.Correct, s.Scored, s.Pct, s.Steady,
 			s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3], s.Runs, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.Ended.Format("2006-01-02 15:04"))
 	}
 	if len(scores) > 1 {

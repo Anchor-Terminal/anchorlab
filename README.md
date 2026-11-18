@@ -317,7 +317,9 @@ have answers that don't move, five are traps (a listing that doesn't exist, a wr
 alone). The rest are worked out from the site's public API when the task runs, so they stay right
 as the listings change and a model can't learn them.
 
-A score counts a task right when it's right in more than half the passes it was scored in. An answer
+A score's headline is the Lab score, 0 to 100: the tasks right, a level 2 task counting twice and a
+level 3 task three times, out of the tasks scored weighted the same way. A score counts a task right
+when it's right in more than half the passes it was scored in. An answer
 is checked against the site as it was when the task started and as it is when the model answered,
 so data that changed while the model worked doesn't cost it the task. A task whose subject left the
 site, or that has two right answers right now (a tie), is skipped for that pass, and one where the

@@ -384,16 +384,19 @@ func clip(s string, n int) string {
 
 // Score is one model's result on the set.
 type Score struct {
-	V            string            `json:"v"`
-	Model        string            `json:"model"`
-	Harness      string            `json:"harness"`
-	Started      time.Time         `json:"started"`
-	Ended        time.Time         `json:"ended"`
-	Runs         int               `json:"runs"`
-	Tasks        int               `json:"tasks"`   // in the set
-	Scored       int               `json:"scored"`  // tasks with a right answer in at least one pass
-	Correct      int               `json:"correct"` // of those, right in more than half the passes they were scored in
-	Pct          float64           `json:"pct"`     // Correct out of Scored, in percent
+	V       string    `json:"v"`
+	Model   string    `json:"model"`
+	Harness string    `json:"harness"`
+	Started time.Time `json:"started"`
+	Ended   time.Time `json:"ended"`
+	Runs    int       `json:"runs"`
+	Tasks   int       `json:"tasks"`   // in the set
+	Scored  int       `json:"scored"`  // tasks with a right answer in at least one pass
+	Correct int       `json:"correct"` // of those, right in more than half the passes they were scored in
+	Pct     float64   `json:"pct"`     // Correct out of Scored, in percent
+	// Points is the Lab score, 0 to 100: the tasks right, a level 2 task counting twice and a level
+	// 3 task three times, out of the tasks scored weighted the same way. What the site shows.
+	Points       int               `json:"points"`
 	Steady       int               `json:"steady"`  // right in every pass they were scored in
 	ByLevel      [4]int            `json:"byLevel"` // Correct by level, 1 to 3
 	OfLevel      [4]int            `json:"ofLevel"` // Scored by level
@@ -518,7 +521,22 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 	if s.Scored > 0 {
 		s.Pct = float64(int(1000*float64(s.Correct)/float64(s.Scored)+0.5)) / 10
 	}
+	s.Points = Points(s.ByLevel, s.OfLevel)
 	return s
+}
+
+// Points is the Lab score from the tasks right and scored at each level: harder tasks weigh more,
+// so two models that both get every easy question right are told apart by the hard ones.
+func Points(right, scored [4]int) int {
+	num, den := 0, 0
+	for l := 1; l <= 3; l++ {
+		num += l * right[l]
+		den += l * scored[l]
+	}
+	if den == 0 {
+		return 0
+	}
+	return (200*num + den) / (2 * den) // rounded to the nearest whole point
 }
 
 // Flip is a task two scores disagree on.
@@ -581,12 +599,14 @@ func Load(state string) ([]Score, error) {
 	return out, nil
 }
 
-// Order sorts scores best first: the share right, then the hard tasks right, then the steady ones,
+// Order sorts scores best first: the Lab score, then the share right, then the hard tasks right, then the steady ones,
 // then fewest forbidden calls, then fewest tokens.
 func Order(s []Score) {
 	sort.SliceStable(s, func(i, j int) bool {
 		a, b := s[i], s[j]
 		switch {
+		case a.Points != b.Points:
+			return a.Points > b.Points
 		case a.Pct != b.Pct:
 			return a.Pct > b.Pct
 		case a.ByLevel[3] != b.ByLevel[3]:

@@ -227,6 +227,11 @@ small, they use the standard library only, and they treat everything above as da
   tool's answer. "We should inpove our tools if the output got truncated" (Vlad). The gateway marks
   a call whose answer was cut, and a score lists our tools by how often, so the evaluation finds
   answers too long for an agent as well as models that can't cope.
+- **One number, 0 to 100: the Lab score.** "We need to give them a number 1 to 100, so another
+  benchmark, we can then feed that back into the model listing" (Vlad). It's the tasks right with a
+  level 2 task counting twice and a level 3 task three times, out of the tasks scored, weighted the
+  same way, so two models that both get every easy question right are told apart by the hard ones.
+  Scores are ranked by it, and it's what the site shows on a model's listing.
 - **Three passes, flips and a sample, as the bench.** A task is right when it's right in more than
   half the passes it was scored in. `-sample` runs ten tasks once and keeps nothing, for a quick
   look at a model before the hours the whole set takes. Scores stay on the box in `eval.ndjson`

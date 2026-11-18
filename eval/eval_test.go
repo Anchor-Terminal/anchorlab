@@ -177,6 +177,16 @@ func TestFoldAndFlips(t *testing.T) {
 	if s.Scored != 2 || s.Correct != 2 || s.Steady != 1 || s.Pct != 100 || s.ByLevel[3] != 1 || s.OfLevel[2] != 0 || len(s.Flaky) != 1 || s.Flaky[0] != "b" || s.PromptTokens != 10 {
 		t.Errorf("fold: %+v", s)
 	}
+	if s.Points != 100 {
+		t.Errorf("all right: %d points", s.Points)
+	}
+	// one easy right and one hard wrong is a quarter of the weight, not half the tasks
+	if p := Points([4]int{0, 1, 0, 0}, [4]int{0, 1, 0, 1}); p != 25 {
+		t.Errorf("points: %d, want 25", p)
+	}
+	if p := Points([4]int{}, [4]int{}); p != 0 {
+		t.Errorf("nothing scored: %d", p)
+	}
 	o := Fold(tasks, [][]TaskResult{pass(StatusCorrect, StatusWrong, StatusWrong)})
 	if o.Correct != 1 || o.Scored != 3 || o.Pct != 33.3 {
 		t.Errorf("one pass: %+v", o)

@@ -40,17 +40,17 @@ const FetchTool = "lab.fetch"
 
 // Options are one evaluation's settings.
 type Options struct {
-	Journal    *journal.Journal
-	Brain      agent.Brain
-	Model      string
+	Journal *journal.Journal
+	Brain   agent.Brain
+	Model   string
 	// where a task falls in the evaluation, for the events: set by Run and RunN
 	pass, passes, n, of int
-	Dial       func(ctx context.Context) (io.ReadWriteCloser, error) // a fresh cell
-	Limits     gateway.Limits                                        // for the MCP server; MaxCalls is also the fetches a task may make
-	UserAgent  string
-	Version    string // the harness's
-	MaxTurns   int    // replies asked of the model for one task
-	JobTimeout time.Duration
+	Dial                func(ctx context.Context) (io.ReadWriteCloser, error) // a fresh cell
+	Limits              gateway.Limits                                        // for the MCP server; MaxCalls is also the fetches a task may make
+	UserAgent           string
+	Version             string // the harness's
+	MaxTurns            int    // replies asked of the model for one task
+	JobTimeout          time.Duration
 	// Sources reads the site for the right answers and serves lab.fetch: NewSources when nil.
 	Sources *Sources
 	// Open connects to the MCP server: gateway.Open when nil. The tests give their own.

@@ -103,7 +103,8 @@ func evalOptions(j *journal.Journal, b agent.Brain, model, sock string, unsafeCe
 
 // runEval evaluates one model and keeps its score, unless it was stopped, no program reached a
 // cell (the score would measure the box), or the site didn't answer most of the tasks (it would
-// measure the site).
+// measure the site). A stop keeps the questions finished so far (eval.Checkpoint), and the next
+// evaluation of the same model carries on from them.
 func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string, runs int) (eval.Score, error) {
 	b, err := newBrain(modelURL, model, maxTokens, wait, temperature)
 	if err != nil {
@@ -114,16 +115,37 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 		return eval.Score{}, err
 	}
 	o := evalOptions(j, b, model, sock, unsafeCells)
+	began := time.Now()
+	cp, why, err := eval.OpenCheckpoint(state, model, runs, began)
+	if err != nil {
+		return eval.Score{}, fmt.Errorf("the evaluation's checkpoint: %w", err)
+	}
+	o.Resume = cp
+	if done, by := cp.Count(); why == "resumed" {
+		// the stats' progress counts on from here, so the questions done before the stop still count
+		j.Event("", "eval.resume", map[string]any{"model": model, "started": cp.Started, "done": done, "right": by[eval.StatusCorrect],
+			"wrong": by[eval.StatusWrong] + by[eval.StatusNoAnswer], "skipped": by[eval.StatusSkipped], "unreachable": by[eval.StatusUnreachable], "stops": cp.Stops})
+	} else if why != "new" {
+		j.Event("", "eval.restart", map[string]any{"model": model, "why": why})
+	}
 	s := eval.RunN(ctx, o, runs)
 	switch {
 	case ctx.Err() != nil:
-		return s, errors.New("stopped before the end; no score kept")
+		cp.Stop(time.Since(began))
+		return s, errors.New("stopped before the end; the questions done are kept, and it carries on from them next time")
 	case s.Turns > 0 && s.Builds == 0:
+		cp.Finish()
 		return s, errors.New("the model wrote programs but none reached a cell; no score kept (journalctl -u anchor-lab-cell.socket)")
 	case s.Unreachable*2 > s.Runs*s.Tasks:
+		cp.Finish()
 		return s, errors.New("the site or its MCP server didn't answer most of the tasks; no score kept")
 	}
-	return s, eval.Save(state, s)
+	if err := eval.Save(state, s); err != nil {
+		cp.Stop(time.Since(began)) // the questions are still good: try again from them
+		return s, err
+	}
+	cp.Finish()
+	return s, nil
 }
 
 // evalQueued runs the evaluations asked for in the inbox, oldest first, between tests.
@@ -133,18 +155,21 @@ func evalQueued(ctx context.Context, j *journal.Journal, state, sock string, uns
 		if ctx.Err() != nil {
 			return
 		}
-		os.Remove(files[i])
 		if !modelName.MatchString(m) {
+			os.Remove(files[i])
 			j.Event("", "eval.refused", map[string]any{"model": m})
 			continue
 		}
 		j.Event("", "eval.start", map[string]any{"model": m})
 		s, err := runEval(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, eval.DefaultRuns)
 		if err != nil && ctx.Err() != nil {
-			// the harness is stopping, for a restart or an install: nothing wrong with the model
+			// the harness is stopping, for a restart or an install: nothing wrong with the model. The
+			// request stays in the inbox, still the oldest, so the next start takes it first and
+			// carries on from the checkpoint.
 			j.Event("", "eval.stopped", map[string]any{"model": m})
 			return
 		}
+		os.Remove(files[i])
 		if err != nil {
 			j.Event("", "eval.failed", map[string]any{"model": m})
 			continue

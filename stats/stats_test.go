@@ -329,3 +329,30 @@ func TestLately(t *testing.T) {
 		t.Errorf("lately:\n got %q\nwant %q", got, want)
 	}
 }
+
+// An evaluation carried on after a stop counts on from what it had done, and its request, kept in
+// the inbox until it's done, isn't also shown as waiting.
+func TestProgressResumed(t *testing.T) {
+	c, _ := fixture(t)
+	write(t, filepath.Join(c.State, "events", "2026-11-17.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-17T06:00:00Z","run":"","ev":"eval.start","model":"gemma-4-31b"}`,
+		`{"t":"2026-11-17T09:00:00Z","run":"","ev":"harness.start"}`,
+		`{"t":"2026-11-17T09:00:05Z","run":"","ev":"eval.start","model":"gemma-4-31b"}`,
+	}, "\n")+"\n")
+	write(t, filepath.Join(c.State, "eval", "events", "2026-11-17.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-17T09:00:06Z","run":"","ev":"eval.resume","model":"gemma-4-31b","started":"2026-11-17T06:00:01Z","done":88,"right":70,"wrong":15,"skipped":3,"unreachable":0,"stops":1}`,
+		`{"t":"2026-11-17T09:00:07Z","run":"20261117T090007-eval-t","ev":"eval.task","task":"t","model":"gemma-4-31b","pass":2,"passes":3,"n":30,"of":59}`,
+		`{"t":"2026-11-17T09:03:00Z","run":"20261117T090007-eval-t","ev":"eval.end","task":"t","status":"correct"}`,
+	}, "\n")+"\n")
+	write(t, filepath.Join(c.State, "inbox", "eval-gemma-4-31b.request"), "gemma-4-31b\n1\n")
+	write(t, filepath.Join(c.State, "inbox", "eval-qwen3.8-27b.request"), "qwen3.8-27b\n2\n")
+	s := Collect(c)
+	p := s.Progress
+	if p == nil || p.Done != 89 || p.Right != 71 || p.Wrong != 15 || p.Skipped != 3 || p.Pass != 2 || p.Question != 30 ||
+		!p.Started.Equal(time.Date(2026, 11, 17, 6, 0, 1, 0, time.UTC)) {
+		t.Errorf("progress: %+v", p)
+	}
+	if len(s.Queue) != 1 || s.Queue[0].Model != "qwen3.8-27b" {
+		t.Errorf("queue: %+v", s.Queue)
+	}
+}

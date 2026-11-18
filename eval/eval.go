@@ -56,6 +56,9 @@ type Options struct {
 	// Open connects to the MCP server: gateway.Open when nil. The tests give their own.
 	Open  func(ctx context.Context, url, userAgent string, lim gateway.Limits) (*gateway.Session, []gateway.Tool, error)
 	Tasks []Task // Tasks when nil
+	// Resume is the evaluation's checkpoint: questions it finished before a stop aren't asked
+	// again, and each one finished now is written down. Nil keeps nothing.
+	Resume *Checkpoint
 }
 
 // Statuses of one task in one pass.
@@ -430,6 +433,9 @@ type Score struct {
 	TaskMs     map[string]int64 `json:"taskMs,omitempty"` // each task's time, start to grade, on average over the passes it ran in
 	Flaky      []string         `json:"flaky,omitempty"`
 	Wrong      []string         `json:"wrong,omitempty"`
+	// Resumed is how many times the evaluation was stopped and carried on from its checkpoint
+	// (Checkpoint), the harness in Harness being the one that finished it.
+	Resumed int `json:"resumed,omitempty"`
 }
 
 // Run is one pass over the set.
@@ -444,8 +450,17 @@ func Run(ctx context.Context, o Options) []TaskResult {
 		if ctx.Err() != nil {
 			break
 		}
+		if r, ok := o.Resume.Has(max(o.pass, 1), t.ID); ok {
+			out = append(out, r)
+			continue
+		}
 		o.n = i + 1
-		out = append(out, RunTask(ctx, o, t))
+		r := RunTask(ctx, o, t)
+		if ctx.Err() != nil {
+			break // stopped in the middle of the question: it's asked again on the next start
+		}
+		o.Resume.Record(max(o.pass, 1), r) // the pass as RunTask's events give it
+		out = append(out, r)
 	}
 	return out
 }
@@ -469,6 +484,11 @@ func RunN(ctx context.Context, o Options, n int) Score {
 	s := Fold(o.tasks(), passes)
 	s.Model, s.Harness, s.Started, s.Ended = o.Model, o.Version, started, time.Now().UTC()
 	s.WallMs = s.Ended.Sub(started).Milliseconds()
+	if c := o.Resume; c != nil && !c.Started.IsZero() {
+		// a score continued after a stop starts when the evaluation first did, and its time is
+		// the time it ran, not the time it waited
+		s.Started, s.WallMs, s.Resumed = c.Started, c.PriorMs+s.WallMs, c.Stops
+	}
 	return s
 }
 

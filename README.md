@@ -313,6 +313,9 @@ anchor-lab eval -compare
 anchor-lab eval -flips qwen3.8-27b,qwen3.5-122b-a10b
 ```
 
+An evaluation stopped by a restart or an install isn't lost: each question is kept as it finishes,
+and the next start carries on from the one that was in flight.
+
 The tasks are in `eval/tasks.go`, public: level 1 is one lookup, level 2 a few lookups or a
 comparison, level 3 a filter, a join across the API's files or arithmetic over many listings. Eight
 have answers that don't move, five are traps (a listing that doesn't exist, a write tool to leave

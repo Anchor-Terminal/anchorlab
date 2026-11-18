@@ -186,7 +186,11 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 			case "bench":
 				q = append(q, "bench "+r.Model)
 			default:
-				q = append(q, "evaluate "+r.Model)
+				if r.Mode == "code" {
+					q = append(q, "evaluate "+r.Model+" (code only)")
+				} else {
+					q = append(q, "evaluate "+r.Model)
+				}
 			}
 		}
 		fmt.Fprintf(w, "waiting  %s\n", strings.Join(q, " · "))

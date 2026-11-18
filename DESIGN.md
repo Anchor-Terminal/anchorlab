@@ -272,6 +272,26 @@ small, they use the standard library only, and they treat everything above as da
   in `lately`, and a harness that starts again while one was running counts it as stopped even
   when nothing was logged. `anchor-lab status` prints the latest three, so the model to queue again
   is in front of whoever installed.
+- **The model chooses: its own tool calls, or programs.** Vlad, 18 November 2026: "can we test
+  it's tools call capability as well not just writing the code, for something it will be writing
+  code and executing but let the model choose how it wants to get there, tool call or write code".
+  In either mode (`-mode either`, the default) the model is offered the MCP server's callable
+  tools and `lab_fetch` as native tool calls, in the OpenAI chat format llama-server speaks, and
+  one more, `run_program`, which builds and runs a Go program as code mode does; a go block in
+  the reply's text runs too. Each reply calls tools, runs a program, or answers. Native calls go
+  through the same gateway as a program's, so the limits, the forced dry runs, the redaction and
+  the address check are the same, and nothing new reaches the network. A native call's answer
+  reaches the model cut at 12,000 characters, where a program reads up to 4 MB and prints what it
+  needs: that's the trade the model chooses between. Either mode gets 16 replies a task to code
+  mode's 8, since a native call usually takes a reply of its own. Asked which should be the Lab
+  score, Vlad chose either mode, since that's how agents work: the queue's requests run in it,
+  and code mode is a run asked for by hand (`-mode code`, its own request in the inbox). Scores
+  keep their mode and aren't compared across modes; a score from before modes is code mode. Each
+  task records how the model got there (native, program, both or none) and a score sums them in
+  `paths`, so which path a model takes, and whether it pays on the hard tasks, is in the record.
+  A model server whose chat template takes no tools refuses a request with tools in it; the task
+  then carries on with programs only and the score counts it in `noTools`, so a model isn't
+  marked down for its server. The checkpoint keeps the mode, and isn't carried on in the other.
 - **A stopped evaluation carries on where it stopped.** Vlad, 18 November 2026: "can we add a thing
   to be able to stop and continue mid eval? this way we don't waste that much time every time, like
   now i cna;'t deploy for another few hours until the eval run i started at 6 finsihes". Each

@@ -39,12 +39,16 @@ func evalCmd(args []string) error {
 	sample := fs.Bool("sample", false, "one pass over a small mix of the tasks (eval.Sample), printed and not kept: a quick look at a new model")
 	runs := fs.Int("runs", eval.DefaultRuns, "passes over the set; a task counts as right when it's right in more than half of the passes it was scored in")
 	here := fs.Bool("here", false, "run it in this process even if this user can't write the lab's state; otherwise it's asked of the lab")
+	mode := fs.String("mode", eval.ModeEither, "either: the model calls tools itself or writes programs, as it chooses (the Lab score); code: programs only")
 	fs.Parse(args)
+	if *mode != eval.ModeEither && *mode != eval.ModeCode {
+		return fmt.Errorf("-mode: either or code, got %q", *mode)
+	}
 	switch {
 	case *check:
 		return evalCheck()
 	case *flips != "":
-		return evalFlips(*state, *flips)
+		return evalFlips(*state, *flips, *mode)
 	case *compare:
 		return evalCompare(*state)
 	}
@@ -58,25 +62,33 @@ func evalCmd(args []string) error {
 		return fmt.Errorf("-runs: 1 to 10, got %d", *runs)
 	}
 	if *sample {
-		return evalSample(*sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature)
+		return evalSample(*sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature, *mode)
 	}
 	if !*here && !canWrite(*state) {
-		if err := journal.QueueEval(*state, *model); err != nil {
+		queue := journal.QueueEval
+		if *mode == eval.ModeCode {
+			queue = journal.QueueEvalCode
+		}
+		if err := queue(*state, *model); err != nil {
 			return fmt.Errorf("asking the lab to evaluate %s: %w (is this user in the anchorlab group? install.sh adds the user who ran it)", *model, err)
 		}
-		fmt.Printf("asked the lab to evaluate %s, %d passes over %d tasks: it runs after the test in progress, as its own user\n", *model, eval.DefaultRuns, len(eval.Tasks))
+		fmt.Printf("asked the lab to evaluate %s in %s mode, %d passes over %d tasks: it runs after the test in progress, as its own user\n", *model, *mode, eval.DefaultRuns, len(eval.Tasks))
 		fmt.Println("  watch it:  anchor-lab status   (or tail -f the events in", filepath.Join(*state, "eval", "events")+")")
 		fmt.Println("  the score: anchor-lab eval -compare, once it's done")
 		return nil
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	s, err := runEval(ctx, *state, *sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature, *runs)
+	s, err := runEval(ctx, *state, *sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature, *runs, *mode)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("%s on %s, %d passes: Lab score %d; %d of %d right (%.1f%%), %d steady; by level %d/%d, %d/%d, %d/%d; %d calls to a tool it was told to leave alone; %d tokens and %.1f min in the model a pass\n",
-		s.Model, eval.Version, s.Runs, s.Points, s.Correct, s.Scored, s.Pct, s.Steady, s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3],
+	if len(s.Paths) > 0 {
+		fmt.Printf("  how it got there, over every pass: %d with its own tool calls, %d with programs, %d with both, %d with neither; %d tool calls of its own a pass\n",
+			s.Paths["native"], s.Paths["program"], s.Paths["both"], s.Paths["none"], s.Native)
+	}
+	fmt.Printf("%s on %s, %s mode, %d passes: Lab score %d; %d of %d right (%.1f%%), %d steady; by level %d/%d, %d/%d, %d/%d; %d calls to a tool it was told to leave alone; %d tokens and %.1f min in the model a pass\n",
+		s.Model, eval.Version, s.ModeOf(), s.Runs, s.Points, s.Correct, s.Scored, s.Pct, s.Steady, s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3],
 		s.Forbidden, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
 	fmt.Printf("  time: %.0f s a question on average, %.1f output tokens a second, %.1f min in all\n", s.SecPerTask, s.OutputTPS, float64(s.WallMs)/60000)
 	if len(s.Wrong) > 0 {
@@ -95,17 +107,22 @@ func evalCmd(args []string) error {
 }
 
 // evalOptions are an evaluation's settings: the lab's limits, but a task may make as many calls
-// and fetches as a run on a server may.
-func evalOptions(j *journal.Journal, b agent.Brain, model, sock string, unsafeCells bool) eval.Options {
-	return eval.Options{Journal: j, Brain: b, Model: model, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 8, JobTimeout: 90 * time.Second,
-		UserAgent: "anchor-lab/" + version + " (eval; +https://www.anchorterminal.com/benchmark/)", Dial: dialer(sock, unsafeCells)}
+// and fetches as a run on a server may. Either mode gets more replies than code mode, since a
+// native call usually takes a reply of its own (eval.EitherTurns).
+func evalOptions(j *journal.Journal, b agent.Brain, model, sock string, unsafeCells bool, mode string) eval.Options {
+	turns := 8
+	if mode == eval.ModeEither {
+		turns = eval.EitherTurns
+	}
+	return eval.Options{Journal: j, Brain: b, Model: model, Limits: gateway.DefaultLimits, Version: version, MaxTurns: turns, JobTimeout: 90 * time.Second,
+		UserAgent: "anchor-lab/" + version + " (eval; +https://www.anchorterminal.com/benchmark/)", Dial: dialer(sock, unsafeCells), Mode: mode}
 }
 
 // runEval evaluates one model and keeps its score, unless it was stopped, no program reached a
 // cell (the score would measure the box), or the site didn't answer most of the tasks (it would
 // measure the site). A stop keeps the questions finished so far (eval.Checkpoint), and the next
 // evaluation of the same model carries on from them.
-func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string, runs int) (eval.Score, error) {
+func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string, runs int, mode string) (eval.Score, error) {
 	b, err := newBrain(modelURL, model, maxTokens, wait, temperature)
 	if err != nil {
 		return eval.Score{}, err
@@ -114,9 +131,9 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	if err != nil {
 		return eval.Score{}, err
 	}
-	o := evalOptions(j, b, model, sock, unsafeCells)
+	o := evalOptions(j, b, model, sock, unsafeCells, mode)
 	began := time.Now()
-	cp, why, err := eval.OpenCheckpoint(state, model, runs, began)
+	cp, why, err := eval.OpenCheckpoint(state, model, mode, runs, began)
 	if err != nil {
 		return eval.Score{}, fmt.Errorf("the evaluation's checkpoint: %w", err)
 	}
@@ -160,8 +177,9 @@ func evalQueued(ctx context.Context, j *journal.Journal, state, sock string, uns
 			j.Event("", "eval.refused", map[string]any{"model": m})
 			continue
 		}
-		j.Event("", "eval.start", map[string]any{"model": m})
-		s, err := runEval(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, eval.DefaultRuns)
+		mode := journal.EvalMode(files[i])
+		j.Event("", "eval.start", map[string]any{"model": m, "mode": mode})
+		s, err := runEval(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, eval.DefaultRuns, mode)
 		if err != nil && ctx.Err() != nil {
 			// the harness is stopping, for a restart or an install: nothing wrong with the model. The
 			// request stays in the inbox, still the oldest, so the next start takes it first and
@@ -174,7 +192,7 @@ func evalQueued(ctx context.Context, j *journal.Journal, state, sock string, uns
 			j.Event("", "eval.failed", map[string]any{"model": m})
 			continue
 		}
-		j.Event("", "eval.end", map[string]any{"model": m, "correct": s.Correct, "scored": s.Scored, "pct": s.Pct})
+		j.Event("", "eval.end", map[string]any{"model": m, "mode": mode, "correct": s.Correct, "scored": s.Scored, "pct": s.Pct})
 	}
 }
 
@@ -188,9 +206,9 @@ func evalCompare(state string) error {
 		fmt.Println("no scores yet: anchor-lab eval -model <name>")
 		return nil
 	}
-	fmt.Printf("%-28s %5s %7s %6s %6s %8s %8s %8s %5s %10s %9s %7s %6s  %s\n", "model", "score", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "s/q", "tok/s", "when")
+	fmt.Printf("%-28s %-6s %5s %7s %6s %6s %8s %8s %8s %5s %10s %9s %7s %6s  %s\n", "model", "mode", "score", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "s/q", "tok/s", "when")
 	for _, s := range scores {
-		fmt.Printf("%-28.28s %5d %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f %7.0f %6.1f  %s\n", s.Model, s.Points, s.Correct, s.Scored, s.Pct, s.Steady,
+		fmt.Printf("%-28.28s %-6s %5d %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f %7.0f %6.1f  %s\n", s.Model, s.ModeOf(), s.Points, s.Correct, s.Scored, s.Pct, s.Steady,
 			s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3], s.Runs, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.SecPerTask, s.OutputTPS, s.Ended.Format("2006-01-02 15:04"))
 	}
 	if len(scores) > 1 {
@@ -199,7 +217,7 @@ func evalCompare(state string) error {
 	return nil
 }
 
-func evalFlips(state, pair string) error {
+func evalFlips(state, pair, mode string) error {
 	a, b, ok := strings.Cut(pair, ",")
 	a, b = strings.TrimSpace(a), strings.TrimSpace(b)
 	if !ok || a == "" || b == "" {
@@ -211,12 +229,14 @@ func evalFlips(state, pair string) error {
 	}
 	by := map[string]eval.Score{}
 	for _, s := range eval.Latest(all) {
-		by[s.Model] = s
+		if s.ModeOf() == mode {
+			by[s.Model] = s
+		}
 	}
 	sa, okA := by[a]
 	sb, okB := by[b]
 	if !okA || !okB {
-		return fmt.Errorf("-flips: no score yet for %s (anchor-lab eval -compare lists them)", map[bool]string{true: b, false: a}[okA])
+		return fmt.Errorf("-flips: no %s-mode score yet for %s (anchor-lab eval -compare lists them; -mode code for the other)", mode, map[bool]string{true: b, false: a}[okA])
 	}
 	fl := eval.Flips(sa, sb)
 	fmt.Printf("%s %d/%d right, %s %d/%d; %d tasks differ\n", a, sa.Correct, sa.Scored, b, sb.Correct, sb.Scored, len(fl))
@@ -253,7 +273,7 @@ func evalCheck() error {
 
 // evalSample puts a model through eval.Sample once, in this process, and prints each task. The
 // runs go to a journal in the temp folder, since a sample is a look and not a score.
-func evalSample(sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string) error {
+func evalSample(sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature, mode string) error {
 	b, err := newBrain(modelURL, model, maxTokens, wait, temperature)
 	if err != nil {
 		return err
@@ -268,7 +288,7 @@ func evalSample(sock string, unsafeCells bool, modelURL, model string, maxTokens
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	o := evalOptions(j, b, model, sock, unsafeCells)
+	o := evalOptions(j, b, model, sock, unsafeCells, mode)
 	o.Tasks = eval.SampleTasks()
 	right, scored := 0, 0
 	for _, t := range o.Tasks {

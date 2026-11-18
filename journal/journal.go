@@ -439,7 +439,26 @@ func QueueBench(state, model string) error { return queueModel(state, "bench-", 
 // QueueEval asks the harness to evaluate a model: an eval request in the inbox.
 func QueueEval(state, model string) error { return queueModel(state, "eval-", model) }
 
-func queueModel(state, prefix, model string) error {
+// QueueEvalCode asks for an evaluation in code mode, which isn't the Lab score: its request has a
+// name of its own, so it waits beside an either-mode one for the same model, and says code on its
+// third line.
+func QueueEvalCode(state, model string) error { return queueModel(state, "eval-code-", model, "code") }
+
+// EvalMode is the mode an evaluation request asks for: code when its third line says so, and
+// otherwise either, the Lab score's.
+func EvalMode(file string) string {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "either"
+	}
+	lines := strings.SplitN(string(b), "\n", 4)
+	if len(lines) >= 3 && strings.TrimSpace(lines[2]) == "code" {
+		return "code"
+	}
+	return "either"
+}
+
+func queueModel(state, prefix, model string, extra ...string) error {
 	name := prefix + strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
 			return r
@@ -452,7 +471,11 @@ func queueModel(state, prefix, model string) error {
 			return nil
 		}
 	}
-	return WriteInbox(state, name, []byte(model+"\n"+strconv.FormatInt(time.Now().UnixNano(), 10)+"\n"))
+	body := model + "\n" + strconv.FormatInt(time.Now().UnixNano(), 10) + "\n"
+	for _, e := range extra {
+		body += e + "\n"
+	}
+	return WriteInbox(state, name, []byte(body))
 }
 
 // FailedWith is the servers whose latest explore with this model came out failure or partial.

@@ -16,7 +16,7 @@ import (
 func TestCheckpoint(t *testing.T) {
 	state := t.TempDir()
 	now := time.Date(2026, 11, 18, 6, 0, 0, 0, time.UTC)
-	c, why, err := OpenCheckpoint(state, "gemma-4-31b", 3, now)
+	c, why, err := OpenCheckpoint(state, "gemma-4-31b", ModeCode, 3, now)
 	if err != nil || why != "new" {
 		t.Fatalf("%q %v", why, err)
 	}
@@ -27,7 +27,7 @@ func TestCheckpoint(t *testing.T) {
 	f.WriteString(`{"pass":1,"result":{"id":"c","sta`) // the stop came in the middle of a write
 	f.Close()
 
-	c, why, err = OpenCheckpoint(state, "gemma-4-31b", 3, now.Add(7*time.Hour))
+	c, why, err = OpenCheckpoint(state, "gemma-4-31b", ModeCode, 3, now.Add(7*time.Hour))
 	if err != nil || why != "resumed" {
 		t.Fatalf("%q %v", why, err)
 	}
@@ -42,16 +42,16 @@ func TestCheckpoint(t *testing.T) {
 	}
 	c.Stop(time.Minute)
 
-	if _, why, _ := OpenCheckpoint(state, "gemma-4-31b", 1, now.Add(8*time.Hour)); why != "started over: a different evaluation" {
+	if _, why, _ := OpenCheckpoint(state, "gemma-4-31b", ModeCode, 1, now.Add(8*time.Hour)); why != "started over: a different evaluation" {
 		t.Errorf("other passes: %q", why)
 	}
-	c, _, _ = OpenCheckpoint(state, "gemma-4-31b", 3, now)
+	c, _, _ = OpenCheckpoint(state, "gemma-4-31b", ModeCode, 3, now)
 	c.Record(1, TaskResult{ID: "a", Status: StatusCorrect})
 	c.Stop(time.Minute)
-	if _, why, _ := OpenCheckpoint(state, "gemma-4-31b", 3, now.Add(ResumeMaxAge+time.Hour)); why != "started over: stopped too long ago" {
+	if _, why, _ := OpenCheckpoint(state, "gemma-4-31b", ModeCode, 3, now.Add(ResumeMaxAge+time.Hour)); why != "started over: stopped too long ago" {
 		t.Errorf("old: %q", why)
 	}
-	c, _, _ = OpenCheckpoint(state, "gemma-4-31b", 3, now)
+	c, _, _ = OpenCheckpoint(state, "gemma-4-31b", ModeCode, 3, now)
 	c.Finish()
 	if _, err := os.Stat(ResumePath(state, "gemma-4-31b")); !os.IsNotExist(err) {
 		t.Error("a finished evaluation left its checkpoint")
@@ -64,7 +64,7 @@ func TestRunResumes(t *testing.T) {
 	state := t.TempDir()
 	tasks := []Task{{ID: "a", Level: 1}, {ID: "b", Level: 1}, {ID: "c", Level: 1}}
 	now := time.Now().UTC()
-	c, _, _ := OpenCheckpoint(state, "m", 1, now.Add(-time.Hour))
+	c, _, _ := OpenCheckpoint(state, "m", ModeCode, 1, now.Add(-time.Hour))
 	c.Record(1, TaskResult{ID: "a", Level: 1, Status: StatusCorrect})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -91,7 +91,7 @@ func TestRunResumes(t *testing.T) {
 	c.Stop(10 * time.Minute)
 
 	// the next start asks c alone, and the score keeps the first start and the time it ran
-	c, why, _ := OpenCheckpoint(state, "m", 1, now)
+	c, why, _ := OpenCheckpoint(state, "m", ModeCode, 1, now)
 	asked = nil
 	o.Resume, o.Open = c, func(context.Context, string, string, gateway.Limits) (*gateway.Session, []gateway.Tool, error) {
 		asked = append(asked, 0)
@@ -110,4 +110,16 @@ func testJournal(t *testing.T) *journal.Journal {
 		t.Fatal(err)
 	}
 	return j
+}
+
+// A checkpoint of the other mode isn't carried on: code and either scores aren't mixed.
+func TestCheckpointMode(t *testing.T) {
+	state := t.TempDir()
+	now := time.Now()
+	c, _, _ := OpenCheckpoint(state, "m", ModeCode, 3, now)
+	c.Record(1, TaskResult{ID: "a", Status: StatusCorrect})
+	c.Stop(time.Minute)
+	if _, why, _ := OpenCheckpoint(state, "m", ModeEither, 3, now); why != "started over: a different evaluation" {
+		t.Errorf("either after code: %q", why)
+	}
 }

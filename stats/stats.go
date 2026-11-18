@@ -125,6 +125,8 @@ type Queued struct {
 	Kind    string `json:"kind"`
 	Model   string `json:"model"`
 	Servers int    `json:"servers,omitempty"`
+	// Mode is code for an evaluation in code mode, which isn't the Lab score; empty is either mode
+	Mode string `json:"mode,omitempty"`
 }
 
 // Today is the UTC day so far, from the events and the results.
@@ -934,10 +936,14 @@ func queue(state string) []Queued {
 			q = append(q, Queued{Kind: "bench", Model: m})
 		}
 	}
-	evals, _ := journal.EvalRequests(state)
-	for _, m := range evals {
+	evals, files := journal.EvalRequests(state)
+	for i, m := range evals {
 		if modelOK.MatchString(m) {
-			q = append(q, Queued{Kind: "evaluate", Model: m})
+			e := Queued{Kind: "evaluate", Model: m}
+			if journal.EvalMode(files[i]) == "code" {
+				e.Mode = "code"
+			}
+			q = append(q, e)
 		}
 	}
 	return q

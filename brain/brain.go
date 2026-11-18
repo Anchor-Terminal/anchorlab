@@ -19,8 +19,35 @@ import (
 
 // Message is one turn of the conversation.
 type Message struct {
-	Role    string `json:"role"` // system | user | assistant
+	Role    string `json:"role"` // system | user | assistant | tool
 	Content string `json:"content"`
+	// ToolCalls are the tools an assistant's reply asks for, in the OpenAI chat format
+	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
+	// ToolCallID is the call a tool message answers
+	ToolCallID string `json:"tool_call_id,omitempty"`
+}
+
+// ToolCall is one call a reply asks for: Arguments is the JSON object the model wrote, as text.
+type ToolCall struct {
+	ID       string `json:"id"`
+	Type     string `json:"type"` // function
+	Function struct {
+		Name      string `json:"name"`
+		Arguments string `json:"arguments"`
+	} `json:"function"`
+}
+
+// Tool is one tool offered to the model, in the OpenAI chat format.
+type Tool struct {
+	Type     string   `json:"type"` // function
+	Function Function `json:"function"`
+}
+
+// Function is a tool's name, what it does and its arguments' JSON Schema.
+type Function struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description,omitempty"`
+	Parameters  json.RawMessage `json:"parameters"`
 }
 
 // Usage is what a reply cost, as the server counted it.
@@ -61,10 +88,20 @@ func Local(raw string) error {
 
 // Chat sends the conversation and returns the reply's text.
 func (c *Client) Chat(ctx context.Context, msgs []Message) (string, Usage, error) {
+	m, u, err := c.ChatTools(ctx, msgs, nil)
+	return m.Content, u, err
+}
+
+// ChatTools sends the conversation with tools the model may call, and returns the reply: its text,
+// the calls it asks for, or both.
+func (c *Client) ChatTools(ctx context.Context, msgs []Message, tools []Tool) (Message, Usage, error) {
 	if err := Local(c.URL); err != nil {
-		return "", Usage{}, fmt.Errorf("the model's address: %w", err)
+		return Message{}, Usage{}, fmt.Errorf("the model's address: %w", err)
 	}
 	ask := map[string]any{"model": c.Model, "messages": msgs, "max_tokens": c.MaxTokens, "stream": false}
+	if len(tools) > 0 {
+		ask["tools"] = tools
+	}
 	if c.Temperature != nil {
 		ask["temperature"] = *c.Temperature
 	}
@@ -73,20 +110,20 @@ func (c *Client) Chat(ctx context.Context, msgs []Message) (string, Usage, error
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.URL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return "", Usage{}, err
+		return Message{}, Usage{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Transport: &http.Transport{Proxy: nil}}).Do(req)
 	if err != nil {
-		return "", Usage{}, err
+		return Message{}, Usage{}, err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return "", Usage{}, err
+		return Message{}, Usage{}, err
 	}
 	if resp.StatusCode != http.StatusOK {
-		return "", Usage{}, fmt.Errorf("the model answered HTTP %d: %.300s", resp.StatusCode, raw)
+		return Message{}, Usage{}, fmt.Errorf("the model answered HTTP %d: %.300s", resp.StatusCode, raw)
 	}
 	var out struct {
 		Choices []struct {
@@ -95,7 +132,9 @@ func (c *Client) Chat(ctx context.Context, msgs []Message) (string, Usage, error
 		Usage Usage `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil || len(out.Choices) == 0 {
-		return "", Usage{}, errors.New("the model's answer isn't a chat completion")
+		return Message{}, Usage{}, errors.New("the model's answer isn't a chat completion")
 	}
-	return out.Choices[0].Message.Content, out.Usage, nil
+	m := out.Choices[0].Message
+	m.Role = "assistant"
+	return m, out.Usage, nil
 }

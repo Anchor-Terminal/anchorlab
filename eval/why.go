@@ -139,8 +139,8 @@ func Why(dir, model string) (WhyReport, error) {
 			continue
 		case StatusNoAnswer:
 			l.Why = WhyNoAnswer
-			// a journal from before the limit was written down: either mode's is the one to go by
-			if limit := e.MaxTurns; limit > 0 && e.Turns >= limit || limit == 0 && e.Turns >= EitherTurns {
+			// a journal from before the limit was written down was made when either mode had 16
+			if limit := e.MaxTurns; limit > 0 && e.Turns >= limit || limit == 0 && e.Turns >= 16 {
 				l.Why = WhyOutOfReplies
 			}
 		default:

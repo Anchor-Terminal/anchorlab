@@ -105,7 +105,7 @@ func run(args []string) error {
 	unsafeCells := fs.Bool("unsafe-cells", false, "run each program as a plain child of this process, with no sandbox at all: only on a machine with nothing to lose, never on the lab box")
 	modelURL := fs.String("model-url", "http://127.0.0.1:8080/v1", "the model's OpenAI-compatible address, on this machine")
 	model := fs.String("model", "", "the model's name, sent with each request and written in each result; empty runs connect only")
-	maxTokens := fs.Int("max-tokens", 4096, "the most a reply may be")
+	maxTokens := fs.Int("max-tokens", 8192, "the most a reply may be")
 	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	once := fs.Bool("once", false, "one pass over the list, then exit")
@@ -123,7 +123,7 @@ func run(args []string) error {
 		return err
 	}
 	o := agent.Options{
-		Journal: j, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 6, JobTimeout: 90 * time.Second, Attempts: 3,
+		Journal: j, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 12, JobTimeout: 90 * time.Second, Attempts: 5,
 		UserAgent: fmt.Sprintf("anchor-lab/%s (+https://www.anchorterminal.com/benchmark/; %s)", version, *contact),
 		Dial:      dialer(*sock, *unsafeCells),
 		Hold:      func(ctx context.Context) { hold(ctx, j, *state) },
@@ -334,7 +334,7 @@ func benchCmd(args []string) error {
 	unsafeCells := fs.Bool("unsafe-cells", false, "run programs as plain children, with no sandbox: never on the lab box")
 	modelURL := fs.String("model-url", "http://127.0.0.1:8080/v1", "the model's OpenAI-compatible address, on this machine")
 	model := fs.String("model", "", "the model to score, as its server knows it")
-	maxTokens := fs.Int("max-tokens", 4096, "the most a reply may be")
+	maxTokens := fs.Int("max-tokens", 8192, "the most a reply may be")
 	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	compare := fs.Bool("compare", false, "print every score so far, best first, and exit")
@@ -453,7 +453,7 @@ func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelUR
 	}
 	lim := gateway.DefaultLimits
 	lim.MinInterval = 0 // the servers are in this process
-	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 8, JobTimeout: 90 * time.Second, Attempts: 3,
+	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 16, JobTimeout: 90 * time.Second, Attempts: 5,
 		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells), Hold: func(ctx context.Context) { hold(ctx, j, state) }}
 	s := bench.RunN(ctx, o, runs)
 	if ctx.Err() != nil {

@@ -23,8 +23,15 @@ const (
 )
 
 // EitherTurns is how many replies a task gets in either mode. A native call usually takes a reply
-// of its own, where a program makes many, so either mode gets more than code mode's eight.
-const EitherTurns = 16
+// of its own, so it's twice what code mode gets. Both were half this until 21 November 2026
+// (DESIGN.md, "The limits are there to protect a server, not to trip a model").
+const EitherTurns = 32
+
+// CodeTurns is how many replies a task gets in code mode.
+const CodeTurns = 16
+
+// TaskCalls is how many calls to the MCP server, and how many fetches, one task may make.
+const TaskCalls = 200
 
 // ToolBrain is a model that takes tools as native tool calls (brain.Client).
 type ToolBrain interface {

@@ -104,9 +104,9 @@ func TestRepairUnusedBuilds(t *testing.T) {
 
 // The model is told its limits, in the numbers the harness holds it to.
 func TestLimitsNote(t *testing.T) {
-	o := Options{MaxTurns: 16, Limits: gateway.DefaultLimits}
+	o := Options{MaxTurns: EitherTurns, Limits: gateway.Limits{MaxCalls: TaskCalls}}
 	note := o.limitsNote()
-	for _, want := range []string{"16 replies", "40 calls", "40 fetches", "refused"} {
+	for _, want := range []string{"32 replies", "200 calls", "200 fetches", "refused"} {
 		if !strings.Contains(note, want) {
 			t.Errorf("no %q in %q", want, note)
 		}

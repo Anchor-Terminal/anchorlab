@@ -252,6 +252,17 @@ The package you call:
 // explore runs the model's turns. It fills the counts only the loop knows (turns, builds).
 func (o Options) explore(ctx context.Context, run string, sess *gateway.Session, tools []gateway.Tool, r *journal.Result) {
 	j := o.Journal
+	// the run's calls grow with the server: every tool the lab will call can be tried Attempts
+	// times, unless the run was given a tighter limit than the lab's own on purpose
+	if sess.Limits.MaxCalls >= gateway.DefaultLimits.MaxCalls {
+		callable := 0
+		for _, t := range tools {
+			if ok, _ := gateway.Callable(t); ok {
+				callable++
+			}
+		}
+		sess.Limits.MaxCalls = gateway.CallBudget(callable, o.Attempts)
+	}
 	msgs := []brain.Message{
 		{Role: "system", Content: fmt.Sprintf(system, o.Attempts, cell.SDK())},
 		{Role: "user", Content: describe(tools) + "\nWrite the first program."},

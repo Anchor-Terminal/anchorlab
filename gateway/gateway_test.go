@@ -412,3 +412,20 @@ func TestDryRun(t *testing.T) {
 		t.Errorf("calls: %+v", c)
 	}
 }
+
+// A run's calls grow with the server: every tool the lab will call can be tried the tries a run
+// allows, between the default and the most any run gets.
+func TestCallBudget(t *testing.T) {
+	for _, c := range []struct{ callable, tries, want int }{
+		{0, 5, DefaultLimits.MaxCalls},
+		{4, 5, DefaultLimits.MaxCalls},
+		{20, 5, 120},
+		{53, 5, 285},
+		{200, 5, MaxCallBudget},
+		{30, 0, DefaultLimits.MaxCalls},
+	} {
+		if got := CallBudget(c.callable, c.tries); got != c.want {
+			t.Errorf("%d tools, %d tries: %d calls, want %d", c.callable, c.tries, got, c.want)
+		}
+	}
+}

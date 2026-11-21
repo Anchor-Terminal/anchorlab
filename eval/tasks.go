@@ -28,6 +28,15 @@ type Task struct {
 	// counts only when the run made at least one lookup that answered, so a model can't score by
 	// answering from memory.
 	FromList bool
+	// NotFoundCounts is a task where being told the thing isn't there (a 404, a tool's "no such
+	// listing") counts as that lookup: for a task whose right answer is NONE it's the lookup
+	// that answers the question. The hard set's traps set it. The normal set's don't, because how
+	// an answer is checked is part of a set's version (DESIGN.md, "The hard set").
+	NotFoundCounts bool
+	// Verify is for a task with many right answers (a set of listings that meets some rules):
+	// it says whether this answer is one of them, against the site as it is now. Want then gives
+	// one right answer, as an example, or says the rules can't be met any more.
+	Verify func(ctx context.Context, s *Sources, answer string) (bool, error)
 }
 
 func num(f float64, places int) string { return strconv.FormatFloat(f, 'f', places, 64) }

@@ -79,7 +79,7 @@ func main() {
 	case "boxkey":
 		err = boxKeyCmd(args, os.Stdout)
 	case "version":
-		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version)
+		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version, "hard", eval.HardVersion)
 	default:
 		err = fmt.Errorf("no command %q", cmd)
 	}

@@ -46,25 +46,41 @@ type resumeLine struct {
 	StoppedMs int64       `json:"stoppedMs,omitempty"` // a stop, after this long since it last started
 }
 
-// ResumePath is where a model's checkpoint is kept.
-func ResumePath(state, model string) string {
+// ResumePath is where a model's checkpoint on the normal set is kept.
+func ResumePath(state, model string) string { return ResumePathSet(state, Normal(), model) }
+
+// ResumePathSet is where a model's checkpoint on a set is kept. Another set's are in a folder of
+// its own, so a model stopped in the middle of the normal set keeps that checkpoint while it's
+// put through the hard one.
+func ResumePathSet(state string, set Set, model string) string {
 	safe := strings.Map(func(r rune) rune {
 		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' || r == '_' {
 			return r
 		}
 		return '-'
 	}, model)
-	return filepath.Join(state, "eval", "resume", safe+".ndjson")
+	if set.Version == "" || set.Version == Version {
+		return filepath.Join(state, "eval", "resume", safe+".ndjson")
+	}
+	return filepath.Join(state, "eval", "resume", set.Name, safe+".ndjson")
 }
 
 // OpenCheckpoint carries on the model's evaluation where it stopped, when there's one of this set,
 // this mode and this many passes from the last ResumeMaxAge, and otherwise starts one. why says which, in
 // words from a fixed list: "new", "resumed", or why an old one was dropped.
 func OpenCheckpoint(state, model, mode string, runs int, now time.Time) (c *Checkpoint, why string, err error) {
+	return OpenCheckpointSet(state, Normal(), model, mode, runs, now)
+}
+
+// OpenCheckpointSet is OpenCheckpoint for a model's evaluation on any set.
+func OpenCheckpointSet(state string, set Set, model, mode string, runs int, now time.Time) (c *Checkpoint, why string, err error) {
 	if mode == "" {
 		mode = ModeCode
 	}
-	path := ResumePath(state, model)
+	if set.Version == "" {
+		set = Normal()
+	}
+	path := ResumePathSet(state, set, model)
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, "", err
 	}
@@ -76,7 +92,7 @@ func OpenCheckpoint(state, model, mode string, runs int, now time.Time) (c *Chec
 		switch {
 		case !ok:
 			why = "started over: the checkpoint couldn't be read"
-		case head.Set != Version:
+		case head.Set != set.Version:
 			why = "started over: the task set changed"
 		case head.Model != model || head.Runs != runs || head.Mode != mode && !(head.Mode == "" && mode == ModeCode):
 			why = "started over: a different evaluation"
@@ -90,7 +106,7 @@ func OpenCheckpoint(state, model, mode string, runs int, now time.Time) (c *Chec
 	if why != "resumed" {
 		c.Done, c.PriorMs, c.Stops = map[int]map[string]TaskResult{}, 0, 0
 		c.Started = now.UTC()
-		b, _ := json.Marshal(resumeHead{V: ResumeVersion, Set: Version, Model: model, Mode: mode, Runs: runs, Started: c.Started})
+		b, _ := json.Marshal(resumeHead{V: ResumeVersion, Set: set.Version, Model: model, Mode: mode, Runs: runs, Started: c.Started})
 		if err := os.WriteFile(path, append(b, '\n'), 0o640); err != nil {
 			return nil, "", err
 		}

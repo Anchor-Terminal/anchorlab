@@ -170,6 +170,10 @@ type Rank struct {
 	Rank     int                `json:"rank"`
 	Ranked   bool               `json:"ranked"`
 	Scores   map[string]float64 `json:"scores"`
+	// Negative is the points taken off the score, zero or less, and Area the group of categories
+	// the listing's category belongs to. The hard set reads them.
+	Negative float64 `json:"negative"`
+	Area     string  `json:"area"`
 }
 
 // Rankings is /api/v1/rankings.json.
@@ -217,6 +221,8 @@ type Tool struct {
 	LastRelease string   `json:"lastRelease"`
 	Pricing     string   `json:"pricing"`
 	Transports  []string `json:"transports"`
+	// SameCompany are the other listings from the same company, by slug
+	SameCompany []string `json:"sameCompany"`
 }
 
 func (s *Sources) Tool(ctx context.Context, slug string) (Tool, error) {
@@ -244,6 +250,8 @@ type Model struct {
 	Blended float64 `json:"blendedPer1M"`
 	Context int     `json:"contextTokens"`
 	MaxOut  int     `json:"maxOutput"`
+	// TaskCosts is what the model costs for each of the price list's sample tasks, in US dollars
+	TaskCosts map[string]float64 `json:"taskCosts"`
 }
 
 // Prices is /api/v1/prices.json.
@@ -252,9 +260,10 @@ type Prices struct {
 	Units  map[string]struct {
 		Label string `json:"label"`
 		Rows  []struct {
-			Slug string  `json:"slug"`
-			Item string  `json:"item"`
-			USD  float64 `json:"usd"`
+			Slug  string  `json:"slug"`
+			Item  string  `json:"item"`
+			USD   float64 `json:"usd"`
+			Grade string  `json:"grade"`
 		} `json:"rows"`
 	} `json:"units"`
 }
@@ -320,4 +329,89 @@ func (s *Sources) Benchmark(ctx context.Context) (Benchmark, error) {
 		err = errors.New("benchmark.json: no categories")
 	}
 	return b.Benchmark, err
+}
+
+// Sunset is one line of the upcoming list in /api/v1/sunsets.json: a change a listing has
+// announced, its kind (shutdown, breaking, price, rename, notice) and the listing's slug.
+type Sunset struct {
+	Date string `json:"date"`
+	Kind string `json:"kind"`
+	Tool string `json:"tool"`
+}
+
+func (s *Sources) Upcoming(ctx context.Context) ([]Sunset, error) {
+	var d struct {
+		Upcoming []Sunset `json:"upcoming"`
+	}
+	err := s.json(ctx, "/api/v1/sunsets.json", &d)
+	if err == nil && len(d.Upcoming) == 0 {
+		err = errors.New("sunsets.json: nothing upcoming")
+	}
+	return d.Upcoming, err
+}
+
+// X402 is the slugs on /api/v1/x402.json, the listings that take x402 payments.
+func (s *Sources) X402(ctx context.Context) ([]string, error) {
+	var d struct {
+		Tools []struct {
+			Slug string `json:"slug"`
+		} `json:"tools"`
+	}
+	err := s.json(ctx, "/api/v1/x402.json", &d)
+	if err == nil && len(d.Tools) == 0 {
+		err = errors.New("x402.json: no listings")
+	}
+	var out []string
+	for _, t := range d.Tools {
+		out = append(out, t.Slug)
+	}
+	return out, err
+}
+
+// Page is a page's Markdown twin (or any other file on the site) as text.
+func (s *Sources) Page(ctx context.Context, path string) (string, error) {
+	b, err := s.read(ctx, path)
+	return string(b), err
+}
+
+// Stack is one of the ready-made sets of tools in /api/v1/stacks.json, with each component's
+// listing and overall score.
+type Stack struct {
+	Slug       string `json:"slug"`
+	Name       string `json:"name"`
+	Components []struct {
+		Tool  string  `json:"tool"`
+		Score float64 `json:"score"`
+	} `json:"components"`
+}
+
+func (s *Sources) Stacks(ctx context.Context) ([]Stack, error) {
+	var d struct {
+		Stacks []Stack `json:"stacks"`
+	}
+	err := s.json(ctx, "/api/v1/stacks.json", &d)
+	if err == nil && len(d.Stacks) == 0 {
+		err = errors.New("stacks.json: no stacks")
+	}
+	return d.Stacks, err
+}
+
+// CategoryTools is each category's listings as /api/v1/categories.json gives them, which is the
+// listings whose own category it is and the ones that are also shown under it.
+func (s *Sources) CategoryTools(ctx context.Context) (map[string][]string, error) {
+	var d struct {
+		Categories []struct {
+			Slug  string   `json:"slug"`
+			Tools []string `json:"tools"`
+		} `json:"categories"`
+	}
+	err := s.json(ctx, "/api/v1/categories.json", &d)
+	if err == nil && len(d.Categories) == 0 {
+		err = errors.New("categories.json: no categories")
+	}
+	out := map[string][]string{}
+	for _, c := range d.Categories {
+		out[c.Slug] = c.Tools
+	}
+	return out, err
 }

@@ -316,6 +316,8 @@ anchor-lab eval -model qwen3.8-27b        # the whole set, three passes, kept
 anchor-lab eval -model qwen3.8-27b -mode code  # programs only, beside the Lab score
 anchor-lab eval -compare
 anchor-lab eval -flips qwen3.8-27b,qwen3.5-122b-a10b
+anchor-lab eval -set hard -model qwen3.8-27b   # the hard set: kept apart, never the Lab score
+anchor-lab eval -set hard -compare
 ```
 
 An evaluation stopped by a restart or an install isn't lost: each question is kept as it finishes,
@@ -341,6 +343,53 @@ question is about the site today, not what a model remembers.
 and the site's admin page can ask too. Scores go to `eval.ndjson`, each model's latest is served at
 `/v1/evals` for the site, and a score lists our MCP tools whose answers were too long and came back
 cut short, which are ours to make smaller.
+
+### The hard set
+
+`-set hard` is a second list of questions (`eval/hard.go`, `anchor-lab-eval-hard/1`), 66 of them,
+for when the normal set stops telling models apart. The levels count as they do in the normal set:
+9 at level 1, 28 at level 2, 29 at level 3. Every one has more to get right than the normal set's
+hardest:
+
+- Two or three of the API's files joined, with the wording saying which rows count (ranked or
+  all, a listing's category in the rankings file and not the category file's wider list).
+- The benchmark's weights applied by hand, or changed and applied again to order the top ten.
+- A page's Markdown read past the 12,000 characters a direct tool call returns.
+- Traps one step from something real: a slug one word off, a real model under the wrong
+  provider, a category one letter short, a count whose answer is 0 and not NONE.
+- Six questions that need a listing's own JSON for more listings than the 40 fetches a
+  question gets. The model isn't told the limit. It finds out when a fetch is refused, and has
+  to see that `search_tools` filters by the same field and says how many match, or that
+  `get_tool` reads a listing on a count of its own.
+- Six work tasks with something to hand in: a stack of four listings that keeps five rules and
+  comes within three points of the best one possible (many right answers, checked by a verifier,
+  `Task.Verify`), two ordered lists, an audit of where two of our files disagree, a report of
+  four numbers, and a count by company over 45 listings.
+
+It never makes a Lab score. Its scores go to `eval-hard.ndjson`, its checkpoints to their own
+folder, `/v1/evals` doesn't serve them and the site doesn't rank them. `-check`, `-compare`,
+`-flips`, `-questions`, `-snapshot` and `-grade` all take `-set hard`. It runs in either mode, three
+passes, and has no sample. Working out its right answers takes about 500 fetches of our own site
+(`-check` runs in under a minute), since several answers need every listing of a kind read.
+
+### A model the box can't run
+
+A hosted model can be put through either set with the harness's own grading:
+
+```
+anchor-lab eval -questions > brief.json          # what a model is told: instructions, tool list, questions
+anchor-lab eval -snapshot before.json            # the right answers now, to a file, none printed
+# ... the model answers, with every call it makes logged ...
+anchor-lab eval -grade answers.json -before before.json
+anchor-lab eval -grade pass1.json,pass2.json,pass3.json -before before.json   # three passes, scored together
+```
+
+`answers.json` is `[{"id", "answer", "called": [tool names, lab.fetch for a fetch], "lookups", "asked"}]`:
+what was answered and what was called to get there, taken from a log and not from the model's own
+account. The grading is `eval.GradeGiven`, the same checks a model on the box gets: against the
+snapshot, then against the site now, wrong with no lookup, wrong after a call to a tool the task
+rules out. What it can't reproduce is the harness itself: the limits on turns, the cells, a fresh
+conversation for every question. A score made this way says so when it's printed, and isn't kept.
 
 ## The research folder
 
@@ -395,6 +444,7 @@ scripts find our settings without anything about our machines being written into
 /var/lib/anchor-lab/bench.ndjson          every model's bench score
 /var/lib/anchor-lab/bench/                the bench's own events and runs, kept apart
 /var/lib/anchor-lab/eval.ndjson           every model's evaluation score
+/var/lib/anchor-lab/eval-hard.ndjson      the hard set's scores, apart from the Lab scores
 /var/lib/anchor-lab/eval/                 the evaluation's own events and runs, kept apart
 ```
 

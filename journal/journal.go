@@ -321,8 +321,9 @@ func modelRequests(state, prefix string) (models []string, files []string) {
 		// nanoseconds (queueModel). A file's own time is only as fine as the filesystem's clock
 		// tick, so requests made a few milliseconds apart would tie and run in name order.
 		model, rest, _ := strings.Cut(string(b), "\n")
+		stamp, _, _ := strings.Cut(rest, "\n") // a third line, when there is one, is the mode or the set
 		at := fi.ModTime().UnixNano()
-		if n, err := strconv.ParseInt(strings.TrimSpace(rest), 10, 64); err == nil && n > 0 {
+		if n, err := strconv.ParseInt(strings.TrimSpace(stamp), 10, 64); err == nil && n > 0 {
 			at = n
 		}
 		rs = append(rs, req{p, strings.TrimSpace(model), at})
@@ -444,6 +445,24 @@ func QueueEval(state, model string) error { return queueModel(state, "eval-", mo
 // name of its own, so it waits beside an either-mode one for the same model, and says code on its
 // third line.
 func QueueEvalCode(state, model string) error { return queueModel(state, "eval-code-", model, "code") }
+
+// QueueEvalHard asks for an evaluation on the hard set, which isn't the Lab score either: a name of
+// its own again, and hard on its third line. It runs in either mode.
+func QueueEvalHard(state, model string) error { return queueModel(state, "eval-hard-", model, "hard") }
+
+// EvalSet is the set an evaluation request asks for: hard when its third line says so, and
+// otherwise normal.
+func EvalSet(file string) string {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return "normal"
+	}
+	lines := strings.SplitN(string(b), "\n", 4)
+	if len(lines) >= 3 && strings.TrimSpace(lines[2]) == "hard" {
+		return "hard"
+	}
+	return "normal"
+}
 
 // EvalMode is the mode an evaluation request asks for: code when its third line says so, and
 // otherwise either, the Lab score's.

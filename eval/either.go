@@ -105,7 +105,7 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 	}
 	offered := nativeTools(tools)
 	msgs := []brain.Message{
-		{Role: "system", Content: fmt.Sprintf(systemEither, cell.SDK())},
+		{Role: "system", Content: fmt.Sprintf(systemEither, cell.SDK()) + o.limitsNote()},
 		{Role: "user", Content: "The question: " + t.Ask},
 	}
 	turns := o.MaxTurns

@@ -10,6 +10,7 @@
 //	anchor-lab status    the lab from a terminal: on the box, or -from the box's stats
 //	anchor-lab model     which model the lab uses; `model use <name>` switches it
 //	anchor-lab pause     stop the lab for a while (-for 8h), or -off to go on now
+//	anchor-lab why       how a model lost the questions it lost in its latest evaluation
 //	anchor-lab targets   write the list of servers to test, from Anchor Terminal's public API
 //	anchor-lab version
 package main
@@ -78,6 +79,8 @@ func main() {
 		err = pauseCmd(args, os.Stdout)
 	case "boxkey":
 		err = boxKeyCmd(args, os.Stdout)
+	case "why":
+		err = whyCmd(args, os.Stdout)
 	case "version":
 		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version)
 	default:

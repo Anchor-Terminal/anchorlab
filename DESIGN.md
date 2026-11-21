@@ -388,6 +388,29 @@ small, they use the standard library only, and they treat everything above as da
   and benches (`bench-<model>.request`, run between tests, so their files are the lab's). Sudo
   for day-to-day work would mean a root shell open on the machine that runs strangers' code, and
   files owned by whoever typed the command.
+- **The harness is kinder to a model without making a question easier.** Three hosted models
+  took the evaluation by hand on 21 November 2026 and each scored 100 where the best model on the
+  box scores 98. Vlad: "can we impove the harness as well, is hiku that much better than qwen 3.8
+  flash next? or is this harness better than the one we have written for anchorlab?". The loop
+  they ran in was kinder than ours in ways that aren't about the questions: one conversation for
+  a whole pass, no limit on replies, Python with a result straight away, files to keep things in,
+  and the limits said up front. Three of those are cheap to give a model on the box, and none
+  touches a task or how an answer is checked, so the set's version stays. First, the model is
+  told its limits (`limitsNote`): the replies it has and the calls and fetches a question gets,
+  where before it learned them by being refused. Second, a build that failed only on an import
+  or a variable nobody used is repaired and built once more (`RepairUnused`), without the model
+  spending a reply on it. Go refuses such a program, and the mistake says nothing about whether the
+  model can answer (how often it happens on the box, `anchor-lab why` will now say). The
+  repair is only made when the compiler said nothing else, the repaired program still has to
+  build, and the model is told it happened. Third, `anchor-lab why -model <name>` reads the
+  journal and says how each lost question was lost (`eval.Why`), because until now the only way
+  to know was to read transcripts, and the next change to the harness should come from what the
+  box says and not a guess. An `eval.end` event now carries the replies allowed, the builds, the
+  failed ones, the repairs, the lookups and whether a ruled-out tool was called. What this costs:
+  a score made on this harness isn't quite comparable with one made before it, which is why a
+  score carries its harness's version. Left for a decision of their own: a scratch file a
+  question's programs can share, and Python in the cell beside Go, which is probably the biggest
+  help to a small model and the biggest change to the cell.
 - **Requests run in the order they were asked for.** A bench or evaluation request carries the
   time it was made, in nanoseconds, and the harness takes them oldest first by that, then by name.
   It used to go by the file's own time, which is only as fine as the filesystem's clock tick: seven

@@ -317,7 +317,7 @@ small, they use the standard library only, and they treat everything above as da
   through is to see that `search_tools` filters on the same field and says how many match, or
   that `get_tool` reads a listing on a count of its own. That was the first thing to cost Haiku a
   question. Then Vlad: "maybe more open ended questions, that need a lot more work, at least a
-  few". Six work tasks have something to hand in: a stack of four listings that keeps five rules
+  few". Six work tasks have something to hand in: a stack of four listings that keeps four rules
   and comes within three points of the best total possible, two ordered lists, an audit of where
   two of our files disagree, a report of four numbers, and a count by company over 45 listings.
   The stack has many right answers, so a task can carry a verifier (`Task.Verify`) that says
@@ -652,7 +652,8 @@ real run, because the page should be shaped by what the results look like.
     gave a wrong answer in nine passes: every miss in a single pass was a right answer with no
     lookup counted behind it, either a file reused from an earlier question (which a model on
     the box can't do) or a 404 as the only lookup on a NONE trap (which is the flaw in Open).
-    The best local model's Lab score is 98, so the normal set no longer tells the top apart.
+    The best local model's Lab score is 98, so the normal set no longer tells the top apart. A
+    pass over the 59 took between two and a half and ten minutes from its first call to its last.
   - The hard set, 66 questions, with the lab's limits enforced by the runner. Fable 66, 66 and
     66 right, a score of 100. Sonnet 62, 64 and 64, 65 right with the passes counted together,
     98. Haiku 64, 62 and 55, 63 right, 95, and right in every pass on 53. What cost them: the

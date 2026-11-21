@@ -361,7 +361,7 @@ hardest:
   question gets. The model isn't told the limit. It finds out when a fetch is refused, and has
   to see that `search_tools` filters by the same field and says how many match, or that
   `get_tool` reads a listing on a count of its own.
-- Six work tasks with something to hand in: a stack of four listings that keeps five rules and
+- Six work tasks with something to hand in: a stack of four listings that keeps four rules and
   comes within three points of the best one possible (many right answers, checked by a verifier,
   `Task.Verify`), two ordered lists, an audit of where two of our files disagree, a report of
   four numbers, and a count by company over 45 listings.

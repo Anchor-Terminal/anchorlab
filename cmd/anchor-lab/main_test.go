@@ -159,10 +159,9 @@ func TestPausable(t *testing.T) {
 	journal.Pause(state, time.Now().Add(time.Hour))
 	ctx, cancel = pausable(root, state)
 	defer cancel(nil)
-	select {
-	case <-ctx.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("a pause didn't cancel the work")
+	// a pause already in the inbox stops the work before anything starts, not a moment after
+	if ctx.Err() == nil {
+		t.Fatal("a pause already in the inbox didn't cancel the work before pausable returned")
 	}
 	if stopWord(ctx) != "paused" || root.Err() != nil {
 		t.Errorf("after a pause: %q, root %v", stopWord(ctx), root.Err())

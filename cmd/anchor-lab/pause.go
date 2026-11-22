@@ -15,9 +15,15 @@ import (
 var errPaused = errors.New("paused")
 
 // pausable is a context for the work that a pause in the inbox cancels, at once if one is there
-// already, otherwise within five seconds of it being asked for.
+// already, otherwise within five seconds of it being asked for. One there already cancels it
+// before this returns, so a harness started under a pause (deploy.sh pauses the lab while it
+// installs) starts nothing before it holds.
 func pausable(root context.Context, state string) (context.Context, context.CancelCauseFunc) {
 	ctx, cancel := context.WithCancelCause(root)
+	if _, ok := journal.PausedUntil(state, time.Now()); ok {
+		cancel(errPaused)
+		return ctx, cancel
+	}
 	go func() {
 		t := time.NewTicker(5 * time.Second)
 		defer t.Stop()

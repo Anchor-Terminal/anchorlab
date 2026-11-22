@@ -3,6 +3,7 @@
 #
 #   models/fetch.sh list                  what's in the list, and what's here already
 #   models/fetch.sh gpt-oss-120b          one model (every file it has)
+#   models/fetch.sh current               the model the lab uses now, if any of its files is missing
 #   models/fetch.sh all                   every model, about 1.02 TB
 #   models/fetch.sh -check all            hash what's here again, download nothing
 #   models/fetch.sh remove qwen3.6-27b    delete a model's files (not the one the lab uses)
@@ -23,7 +24,7 @@ list="$here/models.txt"
 MODELS="${MODELS:-/srv/models}"
 check=0
 if [ "${1:-}" = "-check" ]; then check=1; shift; fi
-[ $# -gt 0 ] || { sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
+[ $# -gt 0 ] || { sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 2; }
 
 rows() { grep -v '^\s*#' "$list" | grep -v '^\s*$'; }
 names() { rows | awk '{print $1}' | uniq; }
@@ -130,6 +131,14 @@ fi
 
 want=("$@")
 [ "$1" = "all" ] && mapfile -t want < <(names)
+# the model the lab uses now (deploy.sh asks for it): what's here and checked is passed over in a
+# moment, so this downloads only what's missing or changed in models.txt
+if [ "$1" = "current" ]; then
+    cur="$(in_use)"
+    [ -n "$cur" ] || { echo "the lab has no model yet, so there's nothing to fetch"; exit 0; }
+    rows | awk -v n="$cur" '$1 == n' | grep -q . || { echo "$cur, the model the lab uses, isn't in models.txt, so there's nothing to fetch for it"; exit 0; }
+    want=("$cur")
+fi
 for n in "${want[@]}"; do
     rows | awk -v n="$n" '$1 == n' | grep -q . || { echo "no model $n in models.txt (models/fetch.sh list)"; exit 1; }
 done

@@ -417,11 +417,11 @@ func TestDryRun(t *testing.T) {
 // allows, between the default and the most any run gets.
 func TestCallBudget(t *testing.T) {
 	for _, c := range []struct{ callable, tries, want int }{
-		{0, 5, DefaultLimits.MaxCalls},
-		{4, 5, DefaultLimits.MaxCalls},
-		{20, 5, 120},
-		{53, 5, 285},
-		{200, 5, MaxCallBudget},
+		{0, 3, DefaultLimits.MaxCalls},
+		{4, 3, DefaultLimits.MaxCalls},
+		{20, 3, 80},
+		{53, 3, 179},
+		{200, 3, MaxCallBudget},
 		{30, 0, DefaultLimits.MaxCalls},
 	} {
 		if got := CallBudget(c.callable, c.tries); got != c.want {

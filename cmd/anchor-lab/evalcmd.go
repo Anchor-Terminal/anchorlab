@@ -30,7 +30,7 @@ func evalCmd(args []string) error {
 	unsafeCells := fs.Bool("unsafe-cells", false, "run programs as plain children, with no sandbox: never on the lab box")
 	modelURL := fs.String("model-url", "http://127.0.0.1:8080/v1", "the model's OpenAI-compatible address, on this machine")
 	model := fs.String("model", "", "the model to evaluate, as its server knows it")
-	maxTokens := fs.Int("max-tokens", 8192, "the most a reply may be")
+	maxTokens := fs.Int("max-tokens", 16384, "the most a reply may be, thinking included")
 	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	compare := fs.Bool("compare", false, "print each model's latest score, best first, and exit")

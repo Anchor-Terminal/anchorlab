@@ -63,6 +63,11 @@ grep -q '^ANCHOR_LAB_TEMPERATURE=' /etc/anchor-lab/env || cat >>/etc/anchor-lab/
 # A temperature for every model, or empty for each model's own from the server's presets.
 ANCHOR_LAB_TEMPERATURE=
 ENV
+# The harness cuts a conversation to fit the models' context, so it has to know it (MODELS.md).
+grep -q '^ANCHOR_LAB_CONTEXT=' /etc/anchor-lab/env || cat >>/etc/anchor-lab/env <<'ENV'
+# The models' context in tokens, the same number as c in the model server's presets. Empty is 65536.
+ANCHOR_LAB_CONTEXT=
+ENV
 # The stats for the site's admin page (anchor-lab-stats.service): the box's own address and a port,
 # and the site's server's address. Left empty, the stats service stays off. Added to an env file
 # from before it existed.

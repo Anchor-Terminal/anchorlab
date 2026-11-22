@@ -111,8 +111,9 @@ small, they use the standard library only, and they treat everything above as da
   restart. Each model's sampling is its publisher's recommendation, in the server's presets
   (`models/presets.ini`), and the harness sends no temperature unless `ANCHOR_LAB_TEMPERATURE` sets
   one. It used to send 0.2 for every model, which overrode what every one of the eight publishers
-  recommends (about 1.0) and is low enough to make a thinking model loop. Thinking is capped at
-  2,048 tokens so a model that thinks still has room in a 4,096-token reply for the program.
+  recommends (about 1.0) and is low enough to make a thinking model loop. Thinking is capped
+  (2,048 tokens of a 4,096-token reply then, 8,192 of 16,384 since 22 November 2026) so a model
+  that thinks still has room in the reply for the program.
 - **Thirty models, for the evaluation to rank.** Vlad, 18 November 2026: "We should run probably
   around 30 models". The eight the calculator picked are seven now: Qwen3.6-27B went, since
   Qwen3.8-27B replaced it at the same size, and Qwen3.8-27B runs at Q8_0, which fits with room to
@@ -317,8 +318,8 @@ small, they use the standard library only, and they treat everything above as da
   the reply's text runs too. Each reply calls tools, runs a program, or answers. Native calls go
   through the same gateway as a program's, so the limits, the forced dry runs, the redaction and
   the address check are the same, and nothing new reaches the network. A native call's answer
-  reaches the model cut at 12,000 characters, where a program reads up to 4 MB and prints what it
-  needs: that's the trade the model chooses between. Either mode gets twice code mode's replies a task (16 to
+  reaches the model cut at 24,000 characters (12,000 until 22 November 2026), where a program
+  reads up to 4 MB and prints what it needs: that's the trade the model chooses between. Either mode gets twice code mode's replies a task (16 to
   8 then, 32 to 16 since 21 November 2026), since a native call usually takes a reply of its own. Asked which should be the Lab
   score, Vlad chose either mode, since that's how agents work: the queue's requests run in it,
   and code mode is a run asked for by hand (`-mode code`, its own request in the inbox). Scores
@@ -414,22 +415,47 @@ small, they use the standard library only, and they treat everything above as da
 - **The limits are there to protect a server, not to trip a model.** Told that the hard set's
   toughest questions were the ones that didn't fit a question's 40 fetches, Vlad, 21 November
   2026: "i would increase the limits not reduce them, i want the model to do its best to tests the
-  tools we are listing". The numbers had been set low for the first runs and never looked at
-  again, and some of them could only ever measure themselves: 40 calls a run can't try every tool
-  once on a server that lists 53. So a run's calls now grow with the server, five tries at every
-  tool the lab will call and 20 over, from 60 up to 400 (`gateway.CallBudget`). An explore gets 12
-  replies where it had 6 and five tries at a tool where it had three, a bench server 16 replies
-  where it had 8, an evaluation question 32 replies in either mode and 16 in code mode where it
-  had 16 and 8, and 200 calls and 200 fetches where it had 40 of each, since the site it asks is
-  ours. A reply may be 8,192 tokens where it was 4,096, which matters to a model that thinks
-  before it answers. What didn't move is what protects somebody else's server or the box: 300 ms
-  between two requests, one address a run, a tool that changes something never called, 60 s a
-  call, 4 MB an answer, and a cell's time and memory. A model that needs fewer replies uses
-  fewer, so the cost is only paid by the runs that were being cut off. Two things follow. Scores
-  made before and after aren't comparable, like any change here, so the rerun that carries the
-  NONE fix carries this too. And the hard set's questions that didn't fit 40 fetches fit 200:
-  they stay, as long jobs over many listings where the quicker way is still to ask the search
-  tool, and the scores the hosted models got on them by hand were made under the old limit.
+  tools we are listing". And the next morning, of the first numbers: "we can use more token,
+  don't need that many tries but tokens we can use more". The numbers had been set low for the
+  first runs and never looked at again, and some could only ever measure themselves: 40 calls a
+  run can't try every tool once on a server that lists 53. So a run's calls now grow with the
+  server, three tries at every tool the lab will call and 20 over, from 60 up to 400
+  (`gateway.CallBudget`). Tries at one tool stay at three: a tool that hasn't answered in three
+  goes isn't going to on the fifth, and each try is a call on somebody else's server. What goes
+  up is what a model has to think and read with. A reply may be 16,384 tokens where it was 4,096,
+  and thinking 8,192 of them where it was 2,048 (`reasoning-budget` in the presets). A direct
+  call's answer reaches the model to 24,000 characters where it was 12,000, a program's output to
+  12,000 where it was 6,000, and a compiler's complaint to 8,000 where it was 4,000. An explore
+  gets 12 replies where it had 6, a bench server 16 where it had 8, an evaluation question 32 in
+  either mode and 16 in code mode where it had 16 and 8, and 200 calls and 200 fetches where it
+  had 40 of each, since the site it asks is ours. What didn't move is what protects somebody
+  else's server or the box: 300 ms between two requests, one address a run, a tool that changes
+  something never called, 60 s a call, 4 MB an answer, and a cell's time and memory. A model that
+  needs fewer replies uses fewer, so the cost is only paid by the runs that were being cut off.
+  Two things follow. Scores made before and after aren't comparable, like any change here, so the
+  rerun that carries the NONE fix carries this too. And the hard set's questions that didn't fit
+  40 fetches fit 200: they stay, as long jobs over many listings where the quicker way is still
+  to ask the search tool, and the scores the hosted models got on them by hand were made under
+  the old limit.
+- **A conversation is cut to fit the context, not refused.** More replies and more to read in
+  each means a long task can outgrow the 65,536 tokens every model is given: eight calls in one
+  reply, each read to 24,000 characters, come close on their own. When that happened the model's
+  server refused the request and the task ended with no answer, which read in the scores as the
+  model giving up. The context can't simply be doubled: it's memory, and the largest models here
+  only just fit beside the one they have. So the model client knows the context
+  (`brain.Client.Context`, from `ANCHOR_LAB_CONTEXT`, 65,536 unless set) and, when a conversation
+  wouldn't leave room for the reply, sends it shorter (`brain.Fit`). The oldest tool output and
+  program output go first, each cut to its first 300 characters with a note of how much is gone
+  so the model knows to ask again, then the oldest programs and replies. The latest four messages
+  are what the model is working from, so they go last, by the same share each, and only as far
+  as it takes. The system message and the task are never cut. The harness keeps the whole
+  conversation in the run's folder: only what's sent is shortened, and the journal says when and
+  by how much (`model.trimmed`). Tokens are counted the way the server last counted them, the
+  characters it was sent over the prompt tokens it reported, and never at more than three
+  characters each, which is fewer than prose or JSON take, so a first guess errs towards leaving
+  room. A request the server still refuses is sent once more into half the room, when that cuts
+  anything more. A longer context for the models that have the memory for it is a line each in
+  the presets and one number in the box's settings, and it's the box that can say which do.
 - **Requests run in the order they were asked for.** A bench or evaluation request carries the
   time it was made, in nanoseconds, and the harness takes them oldest first by that, then by name.
   It used to go by the file's own time, which is only as fine as the filesystem's clock tick: seven
@@ -552,17 +578,19 @@ real run, because the page should be shaped by what the results look like.
 
 | What | Value | Where |
 | --- | --- | --- |
-| Calls a run on a server may make | 60 to 400: five tries at every tool the lab will call, and 20 over | `gateway.CallBudget`, `DefaultLimits.MaxCalls`, `MaxCallBudget` |
+| Calls a run on a server may make | 60 to 400: three tries at every tool the lab will call, and 20 over | `gateway.CallBudget`, `DefaultLimits.MaxCalls`, `MaxCallBudget` |
 | Calls to our own MCP server, and fetches of our site, for one evaluation question | 200 each | `eval.TaskCalls` |
 | Replies asked of the model on one evaluation question | 32 in either mode, 16 in code mode | `eval.EitherTurns`, `eval.CodeTurns` |
-| The most a reply may be | 8,192 tokens | `-max-tokens` |
+| The most a reply may be, and the most of it that may be thinking | 16,384 tokens, 8,192 | `-max-tokens`; `reasoning-budget` in `models/presets.ini` |
+| What a model reads of a direct call's answer, a program's output, a compiler's complaint | 24,000, 12,000 and 8,000 characters | `nativeClip` in `eval/either.go`; `runProgram` |
+| The context a conversation is cut to fit | 65,536 tokens | `ANCHOR_LAB_CONTEXT`, `c` in `models/presets.ini` |
 | One answer's size | 4 MB | `MaxBody` |
 | One call's time | 60 s | `CallTimeout` |
 | Between two requests to a server | 300 ms | `MinInterval` |
 | A call's arguments | 64 KB | `MaxArgs` |
 | A tool's answer as the program sees it | 32 KB | `MaxText` |
 | Replies asked of the model in one explore | 12 | `MaxTurns` in `cmd/anchor-lab/main.go` |
-| Tries at one tool | 5 | `Attempts` |
+| Tries at one tool | 3 | `Attempts` |
 | A program's build, and its run | 3 min, 90 s (2 min at most) | `buildLimit`, `JobTimeout`, `maxRunLimit` |
 | A program, and what's kept of its output | 256 KB, 64 KB | `maxSource`, `maxOutput` in `cell.go` |
 | A cell's memory, processes, life | 6 GB, 512, 7 min | `anchor-lab-cell@.service` |

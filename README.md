@@ -133,8 +133,9 @@ again: it replaces the binary and the units and leaves the state alone. It print
 1. A model: `anchor-lab model use <name>` (the names in `MODELS.md`). The harness speaks to
    `http://127.0.0.1:8080/v1` unless `ANCHOR_LAB_MODEL_URL` in `/etc/anchor-lab/env` says another
    address on the same machine. It sends no temperature, so the server's setting for each model
-   applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. With no model, only `connect` runs,
-   which is a fine first day.
+   applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. It cuts a long conversation to fit
+   the models' context, 65,536 tokens unless `ANCHOR_LAB_CONTEXT` says otherwise (the same number
+   as `c` in the server's presets). With no model, only `connect` runs, which is a fine first day.
 2. The first list: `anchor-lab targets -inbox /var/lib/anchor-lab`.
 3. For a server to collect results: its public key in `/var/lib/labsync/.ssh/authorized_keys`, on
    one line that starts `restrict,command="/usr/local/bin/anchor-lab sync" `, and `labsync` added

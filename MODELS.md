@@ -148,10 +148,16 @@ The first request for a model loads it, which takes from a few seconds to a minu
 ## 5. The settings, model by model
 
 `models/presets.ini` holds them. Everything shares one slot (the lab asks one thing at a time), all
-layers on the GPU, a 65,536-token context, and a 2,048-token cap on thinking. The cap is there
-because thinking counts against the harness's 4,096-token reply: without it, a model that thinks
+layers on the GPU, a 65,536-token context, and an 8,192-token cap on thinking. The cap is there
+because thinking counts against the harness's 16,384-token reply: without it, a model that thinks
 at length runs out before it writes the program. Raise both together, `-max-tokens` on the harness
-and `reasoning-budget` here.
+and `reasoning-budget` here. They were 4,096 and 2,048 until 22 November 2026.
+
+The harness has to know the context too. It cuts a conversation that would outgrow it before
+sending, oldest tool output first, where the server would refuse the request and the task would
+end with no answer. It takes 65,536 unless `ANCHOR_LAB_CONTEXT` in `/etc/anchor-lab/env` says
+otherwise, so a model given a longer context here gains nothing until that's raised to match, and
+no model should be given a shorter one.
 
 Sampling is each publisher's own recommendation, from their model card. The harness sends no
 temperature of its own unless `ANCHOR_LAB_TEMPERATURE` is set, so these apply.

@@ -273,7 +273,7 @@ Each reply is exactly one of:
 - one fenced block that starts with three backticks and the word go, holding a complete program (package main, func main), or
 - your final answer, as a line on its own: ANSWER: <the answer>
 
-The program may import the Go standard library and "job/tool", nothing else. It runs with no network and no files. Its only way out is tool.Call(name, args), and what it prints comes back to you, the first 6,000 characters of it, so print only what you need.
+The program may import the Go standard library and "job/tool", nothing else. It runs with no network and no files. Its only way out is tool.Call(name, args), and what it prints comes back to you, the first 12,000 characters of it, so print only what you need.
 
 The tools:
 - The MCP server's tools, listed below by name.
@@ -301,6 +301,9 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 		r.ModelMs += time.Since(start).Milliseconds()
 		r.PromptTokens += usage.PromptTokens
 		r.OutputTokens += usage.OutputTokens
+		if usage.Trimmed > 0 {
+			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
+		}
 		if err != nil {
 			j.Event(run, "model.failed", map[string]any{"turn": turn})
 			return "", false
@@ -382,14 +385,14 @@ func (o Options) runProgram(ctx context.Context, run, at, code string, sess *gat
 	var obs strings.Builder
 	switch {
 	case !res.Built:
-		fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 4000))
+		fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 8000))
 	default:
 		if repaired {
 			obs.WriteString("(Something imported or declared and never used was taken out so the program would compile.)\n")
 		}
-		fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 6000))
+		fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 12000))
 		if res.Stderr != "" {
-			fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 1500))
+			fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 3000))
 		}
 		if res.TimedOut {
 			obs.WriteString("It was stopped for running too long.\n")

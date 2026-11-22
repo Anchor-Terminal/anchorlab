@@ -274,6 +274,9 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 		r.ModelMs += time.Since(start).Milliseconds()
 		r.PromptTokens += usage.PromptTokens
 		r.OutputTokens += usage.OutputTokens
+		if usage.Trimmed > 0 {
+			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
+		}
 		if err != nil {
 			j.Event(run, "model.failed", map[string]any{"turn": turn, "why": err.Error()})
 			return
@@ -323,11 +326,11 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 		var obs strings.Builder
 		switch {
 		case !res.Built:
-			fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 4000))
+			fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 8000))
 		default:
-			fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 6000))
+			fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 12000))
 			if res.Stderr != "" {
-				fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 1500))
+				fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 3000))
 			}
 			if res.TimedOut {
 				obs.WriteString("It was stopped for running too long.\n")

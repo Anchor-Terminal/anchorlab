@@ -76,8 +76,8 @@ main() {
     paused=0
     trap 'r=$?; [ "$paused" = 1 ] && asgroup ./anchor-lab pause -off -state "$state" >/dev/null 2>&1 && echo "   the pause is lifted"; kill "$keeper" 2>/dev/null; exit $r' EXIT
 
-    # 1. the pull
-    local old; old="$(git rev-parse HEAD)"
+    # 1. the pull. old is where the clone was before it, carried over when a new deploy.sh takes over
+    local old; old="${ANCHOR_LAB_DEPLOY_FROM:-$(git rev-parse HEAD)}"
     if [ "$pull" = 1 ]; then
         say "pull"
         [ "$(git symbolic-ref --short -q HEAD || true)" = main ] || die "the clone isn't on main, so nothing was pulled (git checkout main, or ./deploy.sh -no-pull)"
@@ -91,7 +91,7 @@ main() {
             if ! git diff --quiet "$old" HEAD -- deploy.sh; then
                 note "deploy.sh changed in the pull, so the new one carries on"
                 kill "$keeper" 2>/dev/null; trap - EXIT
-                exec ./deploy.sh -no-pull "$@"
+                ANCHOR_LAB_DEPLOY_FROM="$old" exec ./deploy.sh -no-pull "$@"
             fi
         fi
     fi
@@ -127,7 +127,8 @@ main() {
         if ! ingroup; then
             note "you aren't in the anchorlab group, so it isn't paused: the restart below stops it cleanly"
         else
-            already="$(asgroup ./anchor-lab status -json -state "$state" 2>/dev/null | grep -o '"pausedUntil":"[^"]*"' | cut -d'"' -f4 || true)"
+            already="$(asgroup ./anchor-lab status -json -state "$state" 2>/dev/null | grep -o '"pausedUntil": *"[^"]*"' | cut -d'"' -f4 || true)"
+            case "$already" in 0001-*) already="" ;; esac # the zero time: no pause
             if [ -n "$already" ]; then
                 note "it was paused already, until $already, and stays paused after the deploy"
             elif asgroup ./anchor-lab pause -for 30m -state "$state" >/dev/null; then
@@ -176,9 +177,11 @@ main() {
 
     # 9. the pause comes off in the trap, however this ends
     say "done"
-    note "$(./anchor-lab version)$( [ "$(git rev-parse HEAD)" = "$old" ] || echo ", $(git rev-list --count "$old..HEAD") commits since the last deploy")"
+    note "$(./anchor-lab version)$( [ "$(git rev-parse HEAD)" = "$old" ] || echo ", $(git rev-list --count "$old..HEAD") commits newer than before")"
     if [ "$paused" = 1 ]; then
         note "the lab goes on within 30 seconds: an evaluation from its checkpoint, a retest with what it hadn't reached, a bench from its start"
+    elif [ -n "$already" ]; then
+        note "the lab is still paused until $already, as it was before the deploy (anchor-lab pause -off to go on now)"
     fi
     if [ -r "$state/inbox" ]; then
         note "how it goes: anchor-lab status -watch"

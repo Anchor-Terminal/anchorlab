@@ -94,7 +94,10 @@ ldconfig
 llama-server --list-devices    # Vulkan0: AMD Radeon ... with about 100 GB
 ```
 
-To update later: `git pull`, the two `cmake --build` and `--install` lines again, and
+To update later: `./deploy.sh -llama` from the anchorlab clone, with the llama.cpp checkout's path
+as `LLAMA_CPP` in `private/settings.env`. It pulls and builds llama.cpp as you, installs the build
+(`models/install.sh -llama`, as root) and restarts llama-server if the version changed, with the lab
+paused around it. By hand: `git pull`, the two `cmake --build` and `--install` lines again, and
 `systemctl restart llama-server`.
 
 ## 3. The models
@@ -116,8 +119,9 @@ models/fetch.sh prune           # delete files no line of models.txt names
 lab only if the old model was the one in use, then deletes the old files. `remove` refuses the model
 the lab uses. A model taken out of `models.txt` in a pull request leaves its files behind until
 `prune`. A model added to the list needs its preset in place before the lab can use it:
-`sudo bash models/install.sh` once after the pull, which is installing, the one thing here that's
-root's.
+`./deploy.sh` puts it there (it runs `sudo bash models/install.sh`, the one thing here that's
+root's), and downloads the model the lab uses if any of its files is missing (`models/fetch.sh
+current`).
 
 Run it from the clone of this repository on the box. Each file is checked against its SHA-256 from
 `models/models.txt` once it's down. A download that

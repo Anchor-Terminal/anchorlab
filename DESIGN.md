@@ -242,10 +242,34 @@ small, they use the standard library only, and they treat everything above as da
   - **The model files, from Hugging Face.** Debian doesn't package models. Each file is pinned by
     its SHA-256 in `models/models.txt`, so what's downloaded is exactly what was checked.
 - **The box builds from a clone of this repository.** It's public, so cloning it needs no key, and
-  the box already has Go for the cells. That puts updating the lab on the box (`git pull`,
-  `./build.sh`, `install.sh`) with nothing copied from the site's server but the private bench set,
+  the box already has Go for the cells. That puts updating the lab on the box (`./deploy.sh`, below)
+  with nothing copied from the site's server but the private bench set,
   one file in `private/`. Earlier the box only ever got a binary built elsewhere; that was about
   keeping our private repository and its keys off the box, which this still does.
+- **One command deploys, and the lab carries on.** Vlad, 22 November 2026: "also how do i install
+  the agent lab, can we have a deploy that does evrything?", and "the pull, the install and
+  everything else and just continues". An update was five steps by hand (pull, build, two installs
+  as root, a new list), easy to do in the wrong order or half. `./deploy.sh` does them all, as the
+  ordinary user from the clone, and asks sudo only for the two installs, so the rule that root
+  installs and nothing else holds. It asks for the password once at the start and keeps sudo fresh
+  in the background, so nothing waits on an answer halfway. The order is what makes it safe to run
+  any time. The pull and the build, with its vet and short tests, come before anything is touched,
+  so a bad commit leaves the running lab as it was. Then the lab is paused through its inbox, the
+  way a person pauses it, so what's in progress stops where it goes on from before anything
+  restarts. A llama-server restart under an evaluation would have cost the question in flight. A
+  pause someone set themselves is left alone. The installs follow, and the pause is lifted however
+  the deploy ends. "Just continues" needed three changes to the harness and the model installer.
+  A harness started under a pause holds before it starts anything (`pausable` checks the inbox
+  before it returns), where it used to start a test and stop it a moment later. A retest stopped by
+  a restart keeps the servers it hadn't reached, and the one it was on, in the inbox, as it already
+  did for a pause. And `models/install.sh` restarts llama-server only when its presets, its unit or
+  llama.cpp changed, since the deploy runs it every time and a restart unloads the model. An
+  evaluation already went on from its checkpoint and a bench from its start. A model that won't
+  download, or a list the site doesn't give, is said and passed over, since the rest doesn't need
+  it. A `deploy.sh` changed by the pull hands over to the new one. llama.cpp is rebuilt only with
+  `-llama`: a new llama.cpp can change what a model does, so updating it is a decision and not a
+  side effect. Tested as an ordinary user with a stand-in for sudo, systemctl and the harness, not
+  yet on the box.
 - **Our own things live in `private/`, which git ignores.** Results and transcripts copied off the
   box, our settings and presets, notes. The scripts read `private/settings.env` when it's there, so
   nothing about our machines is written into the public code, and one checkout holds both.

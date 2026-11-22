@@ -438,24 +438,44 @@ small, they use the standard library only, and they treat everything above as da
   to ask the search tool, and the scores the hosted models got on them by hand were made under
   the old limit.
 - **A conversation is cut to fit the context, not refused.** More replies and more to read in
-  each means a long task can outgrow the 65,536 tokens every model is given: eight calls in one
-  reply, each read to 24,000 characters, come close on their own. When that happened the model's
-  server refused the request and the task ended with no answer, which read in the scores as the
-  model giving up. The context can't simply be doubled: it's memory, and the largest models here
-  only just fit beside the one they have. So the model client knows the context
-  (`brain.Client.Context`, from `ANCHOR_LAB_CONTEXT`, 65,536 unless set) and, when a conversation
-  wouldn't leave room for the reply, sends it shorter (`brain.Fit`). The oldest tool output and
-  program output go first, each cut to its first 300 characters with a note of how much is gone
-  so the model knows to ask again, then the oldest programs and replies. The latest four messages
-  are what the model is working from, so they go last, by the same share each, and only as far
-  as it takes. The system message and the task are never cut. The harness keeps the whole
-  conversation in the run's folder: only what's sent is shortened, and the journal says when and
-  by how much (`model.trimmed`). Tokens are counted the way the server last counted them, the
-  characters it was sent over the prompt tokens it reported, and never at more than three
-  characters each, which is fewer than prose or JSON take, so a first guess errs towards leaving
-  room. A request the server still refuses is sent once more into half the room, when that cuts
-  anything more. A longer context for the models that have the memory for it is a line each in
-  the presets and one number in the box's settings, and it's the box that can say which do.
+  each means a long task can outgrow a model's context: eight calls in one reply, each read to
+  24,000 characters, came close to the 65,536 tokens every model had on their own. When that
+  happened the model's server refused the request and the task ended with no answer, which read
+  in the scores as the model giving up. So the model client knows the context it's working in
+  (`brain.Client.Window`) and, when a conversation wouldn't leave room for the reply, sends it
+  shorter (`brain.Fit`). The oldest tool output and program output go first, each cut to its
+  first 300 characters with a note of how much is gone so the model knows to ask again, then the
+  oldest programs and replies. The latest four messages are what the model is working from, so
+  they go last, by the same share each, and only as far as it takes. The system message and the
+  task are never cut. The harness keeps the whole conversation in the run's folder: only what's
+  sent is shortened, and the journal says when and by how much (`model.trimmed`). Tokens are
+  counted the way the server last counted them, the characters it was sent over the prompt
+  tokens it reported, and never at more than three characters each, which is fewer than prose or
+  JSON take, so a first guess errs towards leaving room. A request the server still refuses is
+  sent once more into half the room, when that cuts anything more.
+- **The model's server decides each model's context, and the harness asks.** Vlad, 22 November
+  2026, told that a longer context was memory only the box could measure: "let's add to our
+  harness the bigger context when we start the models". Where a model starts is the server's
+  presets, and a number there is a guess: the cache a context needs depends on a model's layers
+  and heads, not on the size of its file, and the largest models leave about 20 GB of the GPU's
+  100. A context that doesn't fit is a model that doesn't load. llama.cpp already measures this
+  when it loads a model (`--fit`) and takes the largest context there's room for, so the presets
+  now set none: `fit-ctx = 65536` is the least a model may be given, which is what every model
+  had, and `fit-target = 4096` leaves 4 GB of the GPU free. Pinning every model at 131,072 was
+  the other way and was turned down, because it's right only for the models it happens to fit.
+  The harness can't read the presets (they're root's and the model server's) and shouldn't have
+  to be kept in step with them, so it asks the server: `GET /props?model=<name>` says what the
+  model was loaded with (`brain.Client.Loaded`). It uses that up to 131,072 tokens
+  (`ANCHOR_LAB_CONTEXT`), a ceiling so that a model given a million tokens doesn't spend minutes
+  a reply rereading one long task, and so that the models with room all work in the same
+  context. A server that doesn't say (one that isn't llama.cpp) is taken to have 65,536. An
+  evaluation and a bench ask before their first question, which loads the model, and write down
+  what they got (`model.context`). A model the server can't load ends the run there with one
+  event (`model.unloaded`), where it used to fail every question in turn and end as "no program
+  reached a cell". The answer is kept until a request fails, since a model the server loads
+  again may be given a different context. None of this has run on the box: what `--fit` makes of
+  this GPU's memory is the first thing to look at after an install, and a `c` line in a model's
+  section is the way back for that model.
 - **Requests run in the order they were asked for.** A bench or evaluation request carries the
   time it was made, in nanoseconds, and the harness takes them oldest first by that, then by name.
   It used to go by the file's own time, which is only as fine as the filesystem's clock tick: seven
@@ -583,7 +603,8 @@ real run, because the page should be shaped by what the results look like.
 | Replies asked of the model on one evaluation question | 32 in either mode, 16 in code mode | `eval.EitherTurns`, `eval.CodeTurns` |
 | The most a reply may be, and the most of it that may be thinking | 16,384 tokens, 8,192 | `-max-tokens`; `reasoning-budget` in `models/presets.ini` |
 | What a model reads of a direct call's answer, a program's output, a compiler's complaint | 24,000, 12,000 and 8,000 characters | `nativeClip` in `eval/either.go`; `runProgram` |
-| The context a conversation is cut to fit | 65,536 tokens | `ANCHOR_LAB_CONTEXT`, `c` in `models/presets.ini` |
+| A model's context | what llama.cpp has room for when it loads it, 65,536 tokens at least | `fit-ctx`, `fit-target` in `models/presets.ini` |
+| The most of it the harness uses | 131,072 tokens | `ANCHOR_LAB_CONTEXT`, `maxContext` |
 | One answer's size | 4 MB | `MaxBody` |
 | One call's time | 60 s | `CallTimeout` |
 | Between two requests to a server | 300 ms | `MinInterval` |

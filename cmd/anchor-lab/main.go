@@ -300,7 +300,7 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 	if err := brain.Local(url); err != nil {
 		return nil, fmt.Errorf("-model-url: %w (the prompts hold strangers' text and stay on this machine)", err)
 	}
-	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait, Context: modelContext()}
+	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait, MaxContext: maxContext()}
 	if temperature = strings.TrimSpace(temperature); temperature != "" {
 		t, err := strconv.ParseFloat(temperature, 64)
 		if err != nil || t < 0 || t > 2 {
@@ -311,15 +311,32 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 	return c, nil
 }
 
-// modelContext is the model's context in tokens, so a long conversation is cut to fit it before
-// it's sent and not refused by the server: ANCHOR_LAB_CONTEXT when set, and otherwise the 65,536
-// that models/presets.ini gives every model. The two have to agree, so a model given a longer
-// context there needs the same number here.
-func modelContext() int {
+// maxContext is the most of a model's context the lab uses, in tokens: ANCHOR_LAB_CONTEXT when
+// set, and otherwise 131,072. The model's server decides what each model gets when it loads it,
+// and the harness asks (brain.Client.Window), so this is a ceiling and not a setting to keep in
+// step with the presets: it keeps one long task from taking minutes a reply on a model that was
+// given a million tokens.
+func maxContext() int {
 	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("ANCHOR_LAB_CONTEXT"))); err == nil && n >= 4096 {
 		return n
 	}
-	return 65536
+	return 131072
+}
+
+// readyModel has the model's server load the model before a run starts, and writes down the
+// context the run will work within. A model the server can't load ends the run here, with one
+// event that says so, where it used to fail every question in turn.
+func readyModel(ctx context.Context, j *journal.Journal, b *brain.Client, model string) error {
+	if _, err := b.Loaded(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		j.Event("", "model.unloaded", map[string]any{"model": model})
+		return fmt.Errorf("the model's server couldn't load %s, so nothing was run (journalctl -u llama-server): %w", model, err)
+	}
+	tokens, said := b.Window(ctx)
+	j.Event("", "model.context", map[string]any{"model": model, "tokens": tokens, "server": said})
+	return nil
 }
 
 // dialer is how the harness gets a fresh cell: the socket systemd listens on, or with unsafe a
@@ -460,6 +477,9 @@ func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelUR
 	}
 	j, err := journal.Open(filepath.Join(state, "bench"))
 	if err != nil {
+		return bench.Score{}, err
+	}
+	if err := readyModel(ctx, j, b, model); err != nil {
 		return bench.Score{}, err
 	}
 	lim := gateway.DefaultLimits

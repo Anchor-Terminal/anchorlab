@@ -140,19 +140,115 @@ func TestFitLatest(t *testing.T) {
 	}
 }
 
+// propsServer is a model server for the tests: it answers llama.cpp's /props with a context of
+// *window tokens (0 answers with no context, -1 with a 404, -2 with a 500), and a chat with
+// whatever chat does.
+func propsServer(t *testing.T, window *int, asked *[]string, chat http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/props" {
+			chat(w, r)
+			return
+		}
+		*asked = append(*asked, r.URL.Query().Get("model"))
+		switch {
+		case *window == -1:
+			http.NotFound(w, r)
+		case *window == -2:
+			http.Error(w, `{"error":{"message":"failed to load model"}}`, http.StatusInternalServerError)
+		case *window == 0:
+			w.Write([]byte(`{"default_generation_settings":{}}`))
+		default:
+			fmt.Fprintf(w, `{"default_generation_settings":{"id":0,"n_ctx":%d,"params":{"n_predict":-1}},"total_slots":1}`, *window)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// The client asks the model's server what context the model was loaded with, by name, and works
+// within the smaller of that and its own limit. A server that doesn't say gets the assumed
+// context, one that can't load the model is an error, and the answer is asked for once.
+func TestWindow(t *testing.T) {
+	window, asked := 131072, []string{}
+	srv := propsServer(t, &window, &asked, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":3,"completion_tokens":1}}`))
+	})
+	client := func(limit int) *Client {
+		return &Client{URL: srv.URL + "/v1", Model: "qwen3.8-27b+q4", MaxTokens: 1024, Timeout: 5 * time.Second, MaxContext: limit}
+	}
+	ctx := context.Background()
+	c := client(131072)
+	if n, err := c.Loaded(ctx); n != 131072 || err != nil || len(asked) != 1 || asked[0] != "qwen3.8-27b+q4" {
+		t.Fatalf("Loaded: %d, %v, asked %q", n, err, asked)
+	}
+	if n, said := c.Window(ctx); n != 131072 || !said {
+		t.Errorf("a server that says 131072: %d, %v", n, said)
+	}
+	c.Window(ctx)
+	c.Chat(ctx, []Message{{Role: "user", Content: "hi"}})
+	if len(asked) != 2 {
+		t.Errorf("asked %d times, want once by Loaded and once by Window", len(asked))
+	}
+	// the server gave more than the lab uses, and less
+	window = 262144
+	if n, said := client(131072).Window(ctx); n != 131072 || !said {
+		t.Errorf("a server that says 262144: %d, %v", n, said)
+	}
+	window = 81920
+	if n, said := client(131072).Window(ctx); n != 81920 || !said {
+		t.Errorf("a server that says 81920: %d, %v", n, said)
+	}
+	// a server with nothing to say, or no such page: the assumed context, and no error
+	for _, w := range []int{0, -1} {
+		window = w
+		c := client(131072)
+		if n, err := c.Loaded(ctx); n != 0 || err != nil {
+			t.Errorf("Loaded from a server that doesn't say (%d): %d, %v", w, n, err)
+		}
+		if n, said := c.Window(ctx); n != AssumedContext || said {
+			t.Errorf("Window from a server that doesn't say (%d): %d, %v", w, n, said)
+		}
+	}
+	if n, _ := client(32768).Window(ctx); n != 32768 {
+		t.Errorf("assumed, under a limit of 32768: %d", n)
+	}
+	// a server that couldn't load the model: an error, the assumed context for now, and asked again
+	window = -2
+	c = client(131072)
+	if _, err := c.Loaded(ctx); err == nil || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Errorf("Loaded from a server that failed: %v", err)
+	}
+	before := len(asked)
+	if n, said := c.Window(ctx); n != AssumedContext || said {
+		t.Errorf("Window from a server that failed: %d, %v", n, said)
+	}
+	window = 131072
+	if n, said := c.Window(ctx); n != 131072 || !said || len(asked) != before+2 {
+		t.Errorf("Window once the server is back: %d, %v, asked %d more times", n, said, len(asked)-before)
+	}
+	// with no limit, nothing is asked
+	before = len(asked)
+	if n, _ := client(0).Window(ctx); n != 0 || len(asked) != before {
+		t.Errorf("with no limit: %d, asked %d more times", n, len(asked)-before)
+	}
+}
+
 // The room is the context less the reply and a margin, counted in the server's own tokens once it
-// has counted a conversation. A client with a context sends the cut conversation and says how
-// much it left out, and a request the server refuses is sent once more, smaller.
+// has counted a conversation. A client sends a conversation cut to the model's context and says
+// how much it left out, a request the server refuses is sent once more, smaller, and a failed
+// request has the server asked for the context again.
 func TestContext(t *testing.T) {
-	if got := (&Client{Context: 65536, MaxTokens: 16384}).room(); got != (65536-16384-1024)*charsPerToken {
+	if got := (&Client{MaxTokens: 16384}).room(65536); got != (65536-16384-1024)*charsPerToken {
 		t.Errorf("room: %d", got)
 	}
-	if got := (&Client{Context: 65536, MaxTokens: 60000}).room(); got != 65536/4*charsPerToken {
+	if got := (&Client{MaxTokens: 60000}).room(65536); got != 65536/4*charsPerToken {
 		t.Errorf("room with a reply nearly as long as the context: %d", got)
 	}
 	var sent []int
 	refuse, tokens := 0, 3
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	window, asked := 32768, []string{}
+	srv := propsServer(t, &window, &asked, func(w http.ResponseWriter, r *http.Request) {
 		var got struct {
 			Messages []Message `json:"messages"`
 		}
@@ -164,19 +260,18 @@ func TestContext(t *testing.T) {
 			return
 		}
 		fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":%d,"completion_tokens":1}}`, tokens)
-	}))
-	defer srv.Close()
+	})
 	big := strings.Repeat("y", 30000)
 	msgs := []Message{{Role: "system", Content: "s"}, {Role: "user", Content: "q"}}
 	for i := 0; i < 6; i++ {
 		msgs = append(msgs, Message{Role: "assistant", Content: "p"}, Message{Role: "user", Content: big})
 	}
 	whole := size(msgs, nil)
-	c := &Client{URL: srv.URL + "/v1", Model: "m", MaxTokens: 1024, Timeout: 5 * time.Second, Context: 32768}
-	room := c.room()
+	c := &Client{URL: srv.URL + "/v1", Model: "m", MaxTokens: 1024, Timeout: 5 * time.Second, MaxContext: 131072}
+	room := c.room(32768)
 	_, u, err := c.Chat(context.Background(), msgs)
 	if err != nil || u.Trimmed == 0 || len(sent) != 1 || sent[0] > room || sent[0] >= whole {
-		t.Fatalf("with a context: sent %v of %d characters into %d, %d left out, %v", sent, whole, room, u.Trimmed, err)
+		t.Fatalf("in a context of 32768: sent %v of %d characters into %d, %d left out, %v", sent, whole, room, u.Trimmed, err)
 	}
 	// refused once: sent again into half the room, and the reply is the second one's
 	sent, refuse = nil, 1
@@ -184,29 +279,37 @@ func TestContext(t *testing.T) {
 	if err != nil || len(sent) != 2 || sent[1] > room/2 || u2.Trimmed <= u.Trimmed {
 		t.Errorf("refused once: sent %v, %d left out, %v", sent, u2.Trimmed, err)
 	}
-	// refused when there's nothing more to cut: once, and the error is the server's
+	// refused when there's nothing more to cut: once, the error is the server's, and the context
+	// is asked for again before the next request
 	sent, refuse = nil, 5
 	if _, _, err := c.Chat(context.Background(), msgs[:2]); err == nil || len(sent) != 1 {
 		t.Errorf("a short conversation refused: sent %v, %v", sent, err)
 	}
+	refuse, window = 0, 65536
+	before := len(asked)
+	c.Chat(context.Background(), msgs[:2])
+	if n, _ := c.Window(context.Background()); n != 65536 || len(asked) != before+1 {
+		t.Errorf("after a failed request: a context of %d, asked %d more times", n, len(asked)-before)
+	}
 	// the server counts two characters to a token: the room shrinks to match
-	sent, refuse, tokens = nil, 0, 40000
+	room = c.room(65536)
+	sent, tokens = nil, 90000
 	if _, _, err := c.Chat(context.Background(), msgs); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := c.room(), int(float64(room)/charsPerToken*(float64(sent[0])/40000)); got != want || got >= room {
-		t.Errorf("room after the server counted %d characters as 40,000 tokens: %d, want %d", sent[0], got, want)
+	if got, want := c.room(65536), int(float64(room)/charsPerToken*(float64(sent[0])/90000)); got != want || got >= room {
+		t.Errorf("room after the server counted %d characters as 90,000 tokens: %d, want %d", sent[0], got, want)
 	}
 	// a short conversation says nothing about tokens
-	before := c.room()
+	was := c.room(65536)
 	tokens = 10
 	c.Chat(context.Background(), msgs[:2])
-	if c.room() != before {
-		t.Errorf("room after a short conversation: %d, was %d", c.room(), before)
+	if c.room(65536) != was {
+		t.Errorf("room after a short conversation: %d, was %d", c.room(65536), was)
 	}
-	// with no context set, everything is sent
-	c.Context, sent = 0, nil
+	// with no limit, everything is sent
+	c.MaxContext, sent = 0, nil
 	if _, u, _ := c.Chat(context.Background(), msgs); u.Trimmed != 0 || sent[0] != whole {
-		t.Errorf("with no context set: sent %v, %d left out", sent, u.Trimmed)
+		t.Errorf("with no limit: sent %v, %d left out", sent, u.Trimmed)
 	}
 }

@@ -133,6 +133,9 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	if err != nil {
 		return eval.Score{}, err
 	}
+	if err := readyModel(ctx, j, b, model); err != nil {
+		return eval.Score{}, err
+	}
 	o := evalOptions(j, b, model, sock, unsafeCells, mode)
 	o.Hold = func(ctx context.Context) { hold(ctx, j, state) }
 	began := time.Now()
@@ -291,6 +294,9 @@ func evalSample(sock string, unsafeCells bool, modelURL, model string, maxTokens
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	if err := readyModel(ctx, j, b, model); err != nil {
+		return err
+	}
 	o := evalOptions(j, b, model, sock, unsafeCells, mode)
 	o.Tasks = eval.SampleTasks()
 	right, scored := 0, 0

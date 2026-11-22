@@ -70,13 +70,89 @@ type Client struct {
 	// Temperature is sent when set. Unset, the model's server uses its own setting for the model,
 	// which in MODELS.md's presets is the one the model's publisher recommends.
 	Temperature *float64
-	// Context is the model's context in tokens, as its server is set up (c in the presets). When
-	// set, a conversation too long to leave room for the reply is sent with its oldest tool
-	// output and programs cut short (Fit), so a long task ends with an answer and not with the
-	// server refusing the request. Zero sends everything.
-	Context int
+	// MaxContext is the most of a model's context the lab uses, in tokens. The model's server
+	// decides how much each model gets when it loads it (as much as the box has room for), so the
+	// client asks it (Loaded) and works with the smaller of the two (Window). A conversation too
+	// long to leave room for the reply is then sent with its oldest tool output and programs cut
+	// short (Fit), so a long task ends with an answer and not with the server refusing the
+	// request. Zero sends everything and asks nothing.
+	MaxContext int
 
-	per atomic.Uint64 // characters to a token, as the server last counted them (learn)
+	per    atomic.Uint64 // characters to a token, as the server last counted them (learn)
+	window atomic.Int64  // the context this model has, capped at MaxContext; 0 until the server is asked
+	said   atomic.Bool   // the server said it, where false is the lab assuming AssumedContext
+}
+
+// AssumedContext is the context the lab counts on when a model's server doesn't say what it gave
+// the model. It's the least the lab's own presets let llama.cpp give one (fit-ctx).
+const AssumedContext = 65536
+
+// Loaded asks the model's server what context it loaded the model with, in tokens, which loads
+// the model if it wasn't: llama.cpp's GET /props, with the model named for its router. A server
+// that has no such page, or whose answer has no context in it, gets 0 and no error. An error is
+// a server that can't be reached or that couldn't load the model.
+func (c *Client) Loaded(ctx context.Context) (int, error) {
+	if err := Local(c.URL); err != nil {
+		return 0, fmt.Errorf("the model's address: %w", err)
+	}
+	root := strings.TrimSuffix(strings.TrimRight(c.URL, "/"), "/v1")
+	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, "GET", root+"/props?model="+url.QueryEscape(c.Model), nil)
+	if err != nil {
+		return 0, err
+	}
+	resp, err := (&http.Client{Transport: &http.Transport{Proxy: nil}}).Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return 0, err
+	}
+	switch resp.StatusCode {
+	case http.StatusOK:
+	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
+		return 0, nil // not llama.cpp's server: nothing to ask
+	default:
+		return 0, fmt.Errorf("the model's server answered HTTP %d when asked to load %s: %.300s", resp.StatusCode, c.Model, raw)
+	}
+	var out struct {
+		Settings struct {
+			Context int `json:"n_ctx"`
+		} `json:"default_generation_settings"`
+	}
+	if json.Unmarshal(raw, &out) != nil || out.Settings.Context < 0 {
+		return 0, nil
+	}
+	return out.Settings.Context, nil
+}
+
+// Window is the context the client works within, in tokens, and whether the model's server said
+// it: what the model was loaded with, or AssumedContext when the server doesn't say, and never
+// more than MaxContext. The server is asked once and the answer kept, until a request fails,
+// since a model the server has loaded again may have been given a different one. With no
+// MaxContext it's 0: nothing is asked and nothing is cut.
+func (c *Client) Window(ctx context.Context) (int, bool) {
+	if c.MaxContext <= 0 {
+		return 0, false
+	}
+	if n := int(c.window.Load()); n > 0 {
+		return n, c.said.Load()
+	}
+	n, err := c.Loaded(ctx)
+	if err != nil {
+		return min(AssumedContext, c.MaxContext), false // not kept: asked again next time
+	}
+	said := n > 0
+	if !said {
+		n = AssumedContext
+	}
+	n = min(n, c.MaxContext)
+	c.said.Store(said)
+	c.window.Store(int64(n))
+	return n, said
 }
 
 // Local reports whether raw is an address on this machine.
@@ -105,14 +181,15 @@ func (c *Client) Chat(ctx context.Context, msgs []Message) (string, Usage, error
 }
 
 // ChatTools sends the conversation with tools the model may call, and returns the reply: its text,
-// the calls it asks for, or both. With a context set, a conversation too long for it is sent cut
-// (Fit), and Usage.Trimmed says by how much.
+// the calls it asks for, or both. With MaxContext set, a conversation too long for the model's
+// context is sent cut (Fit), and Usage.Trimmed says by how much.
 func (c *Client) ChatTools(ctx context.Context, msgs []Message, tools []Tool) (Message, Usage, error) {
-	if c.Context <= 0 {
+	window, _ := c.Window(ctx)
+	if window <= 0 {
 		m, u, _, err := c.send(ctx, msgs, tools)
 		return m, u, err
 	}
-	room := c.room()
+	room := c.room(window)
 	sent, trimmed := Fit(msgs, tools, room)
 	m, u, status, err := c.send(ctx, sent, tools)
 	if status == http.StatusBadRequest {
@@ -125,6 +202,8 @@ func (c *Client) ChatTools(ctx context.Context, msgs []Message, tools []Tool) (M
 	}
 	if err == nil {
 		c.learn(size(sent, tools), u.PromptTokens)
+	} else {
+		c.window.Store(0) // the model may have been loaded again with another context: ask next time
 	}
 	u.Trimmed = trimmed
 	return m, u, err
@@ -191,12 +270,13 @@ func (c *Client) learn(chars, tokens int) {
 	c.per.Store(math.Float64bits(min(max(per, charsPerToken/2.0), charsPerToken)))
 }
 
-// room is the characters a conversation may take: the context, less the reply and a margin for
-// what the server's template adds, and never less than a quarter of the context.
-func (c *Client) room() int {
-	tokens := c.Context - c.MaxTokens - 1024
-	if tokens < c.Context/4 {
-		tokens = c.Context / 4
+// room is the characters a conversation may take in a context of window tokens: the context,
+// less the reply and a margin for what the server's template adds, and never less than a quarter
+// of the context.
+func (c *Client) room(window int) int {
+	tokens := window - c.MaxTokens - 1024
+	if tokens < window/4 {
+		tokens = window / 4
 	}
 	per := math.Float64frombits(c.per.Load())
 	if per == 0 {

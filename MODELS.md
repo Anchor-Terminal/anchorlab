@@ -284,6 +284,8 @@ plain model's, at the publisher's settings.
 | `qwen3.8-27b+q4-dflash` | Q4_K_M and `dflash-…Q4_0`, 20.5 GB | the 4-bit build with the DFlash draft |
 | `qwen3.8-27b+t0.6` | Q8_0, 28.6 GB | temperature 0.6, below the publisher's 1.0 |
 | `qwen3.8-27b+q4-mtp-t0.6` | Q4_K_M and `mtp-…Q4_0`, 21.1 GB | the 4-bit build, the MTP heads and temperature 0.6 |
+| `qwen3.8-27b+nothink-t0.8` | Q8_0, 28.6 GB | thinking off, temperature 0.8 and top_p 1.0 |
+| `qwen3.8-27b+opencode` | Q8_0 and `…opencode-lora-F16`, 28.9 GB | the one above with harness-hub's LoRA adapter for the OpenCode agent |
 
 The drafts are ggml-org's, beside the model in `ggml-org/Qwen3.8-27B-GGUF`. A preset names the
 draft with `spec-draft-model`, and llama-server reads from the file which kind of draft it is
@@ -297,6 +299,24 @@ thinking, and a higher temperature lowers how many of its guesses are kept.
 models/fetch.sh qwen3.8-27b+mtp          # downloads only the files that aren't here yet
 anchor-lab eval -model qwen3.8-27b+mtp
 models/fetch.sh remove qwen3.8-27b+mtp   # keeps the Q8_0 file, which qwen3.8-27b loads too
+```
+
+**A harness adapter.** `qwen3.8-27b+opencode` loads
+[harness-hub's adapter](https://huggingface.co/harness-hub/Qwen3.8-27B-opencode-adapted) on top of
+the same Q8_0 file: a LoRA of rank 32, 0.3 GB as a GGUF, trained with reinforcement learning inside
+the OpenCode coding agent, Apache-2.0. A preset names it with `lora`. Its card reports 35.3% to
+51.0% on the 51 hardest tasks of SWE-bench Pro and 46.4% to 52.4% on Terminal-Bench 2.1, under
+OpenCode, with thinking off and both models at temperature 0.8 and top_p 1.0, and says to keep
+thinking off. So it has a partner, `qwen3.8-27b+nothink-t0.8`, which is the plain model at those
+settings, and the two differ by the adapter alone. Our harness isn't OpenCode: the tools, the
+prompts and the Go programs are ours. What the pair says is whether an adapter trained for one
+harness helps, does nothing or hurts in another. The card also says the GGUF build of the adapter
+hasn't been evaluated again, and neither variant has run on the box.
+
+```
+models/fetch.sh qwen3.8-27b+opencode     # the adapter, 0.3 GB: the Q8_0 file is here already
+anchor-lab eval -model qwen3.8-27b+nothink-t0.8
+anchor-lab eval -model qwen3.8-27b+opencode
 ```
 
 Another variant is a section and its lines, the same way: copy the model's section, change one

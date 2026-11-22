@@ -116,6 +116,43 @@ func TestModelRequestOrder(t *testing.T) {
 	}
 }
 
+// A model can wait three times over: for its Lab score, for a code-mode run and for the hard set.
+// Each request says which it is, and they run in the order they were asked for, whatever the
+// files' own times say.
+func TestEvalRequestKinds(t *testing.T) {
+	state := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(state, "inbox"), 0o770); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []func(string, string) error{QueueEvalHard, QueueEval, QueueEvalCode} {
+		if err := q(state, "gemma-4-31b"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := QueueEvalHard(state, "gemma-4-31b"); err != nil { // already waiting: keeps its place
+		t.Fatal(err)
+	}
+	same := time.Date(2026, 11, 21, 22, 0, 0, 0, time.UTC)
+	paths, _ := filepath.Glob(filepath.Join(state, "inbox", "eval-*.request"))
+	for _, p := range paths {
+		os.Chtimes(p, same, same)
+	}
+	models, files := EvalRequests(state)
+	if len(models) != 3 {
+		t.Fatalf("requests: %v", files)
+	}
+	var got []string
+	for _, f := range files {
+		got = append(got, EvalSet(f)+"/"+EvalMode(f))
+	}
+	if want := "hard/either,normal/either,normal/code"; strings.Join(got, ",") != want {
+		t.Errorf("requests in order: %v, want %s", got, want)
+	}
+	if EvalSet(filepath.Join(state, "inbox", "gone.request")) != "normal" {
+		t.Error("a request that can't be read isn't the normal set")
+	}
+}
+
 // A pause holds until its time; one past, one further off than a pause may ask for, or a file
 // that isn't a time is no pause, so a mistake can't stop the lab for ever.
 func TestPause(t *testing.T) {

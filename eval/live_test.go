@@ -9,7 +9,7 @@ import (
 	"github.com/Anchor-Terminal/anchorlab/gateway"
 )
 
-// TestLive works every task out against the real site, with no model: the check to run before an
+// TestLive works every task of both sets out against the real site, with no model: the check to run before an
 // evaluation, so a task the data broke is fixed before it costs a model a point. It needs the
 // network, so it runs only with ANCHOR_LAB_LIVE=1 (anchor-lab eval -check does the same on the box).
 func TestLive(t *testing.T) {
@@ -22,7 +22,8 @@ func TestLive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the MCP server: %v", err)
 	}
-	for _, l := range Check(ctx, NewSources("anchor-lab-test"), tools) {
+	src := NewSources("anchor-lab-test")
+	for _, l := range append(Check(ctx, src, tools), CheckTasks(ctx, HardTasks, src, tools)...) {
 		if l.Err != nil {
 			t.Errorf("%s (level %d): %v", l.ID, l.Level, l.Err)
 			continue

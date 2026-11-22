@@ -3,6 +3,7 @@ package eval
 import (
 	"math"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -11,13 +12,16 @@ import (
 type Kind int
 
 const (
-	Text   Kind = iota // a word or a short phrase, case and quotes ignored
-	Number             // a number within the task's tolerance; $, %, commas and units ignored
-	Int                // a whole number, exactly
-	Date               // YYYY-MM-DD
-	Slug               // a listing: its slug or its exact name
-	YesNo              // yes or no
-	None               // the right answer is that there isn't one: NONE
+	Text     Kind = iota // a word or a short phrase, case and quotes ignored
+	Number               // a number within the task's tolerance; $, %, commas and units ignored
+	Int                  // a whole number, exactly
+	Date                 // YYYY-MM-DD
+	Slug                 // a listing: its slug or its exact name
+	YesNo                // yes or no
+	None                 // the right answer is that there isn't one: NONE
+	InOrder              // several slugs or ids, separated by commas, each one right and in its place
+	AnyOrder             // the same in any order
+	Numbers              // several numbers, separated by commas, in order, each within the task's tolerance
 )
 
 // Answer is a right answer: the value, and other ways of writing it that count (a listing's name
@@ -99,6 +103,34 @@ func Correct(k Kind, tol float64, want Answer, got string) bool {
 			}
 		}
 		return false
+	case InOrder, AnyOrder:
+		gs, ws := items(got), items(want.Value)
+		if len(gs) != len(ws) || len(ws) == 0 {
+			return false
+		}
+		if k == AnyOrder {
+			sort.Strings(gs)
+			sort.Strings(ws)
+		}
+		for i := range ws {
+			if gs[i] != ws[i] {
+				return false
+			}
+		}
+		return true
+	case Numbers:
+		gs, ws := items(got), items(want.Value)
+		if len(gs) != len(ws) || len(ws) == 0 {
+			return false
+		}
+		for i := range ws {
+			gv, okG := number(gs[i])
+			wv, okW := number(ws[i])
+			if !okG || !okW || math.Abs(gv-wv) > tol+1e-9 {
+				return false
+			}
+		}
+		return true
 	case YesNo:
 		yn := map[string]string{"yes": "yes", "y": "yes", "true": "yes", "no": "no", "n": "no", "false": "no"}
 		return yn[g] != "" && yn[g] == yn[norm(want.Value)]
@@ -110,6 +142,18 @@ func Correct(k Kind, tol float64, want Answer, got string) bool {
 		}
 		return false
 	}
+}
+
+// items are the parts of an answer that is several things: split at commas, semicolons and line
+// ends, each with what doesn't matter taken off.
+func items(s string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(s, func(r rune) bool { return r == ',' || r == ';' || r == '\n' }) {
+		if p := norm(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 var answerLine = regexp.MustCompile(`(?im)^\s*[*_]*\s*ANSWER\s*[*_]*\s*:\s*[*_]*\s*(.+?)\s*$`)

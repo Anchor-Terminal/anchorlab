@@ -55,7 +55,9 @@ type Options struct {
 	Sources *Sources
 	// Open connects to the MCP server: gateway.Open when nil. The tests give their own.
 	Open  func(ctx context.Context, url, userAgent string, lim gateway.Limits) (*gateway.Session, []gateway.Tool, error)
-	Tasks []Task // Tasks when nil
+	Tasks []Task // the set's when nil
+	// Set is the questions asked and the version the score carries: the normal set when empty
+	Set Set
 	// Hold, when set, waits out a pause before each question (journal.Pause)
 	Hold func(ctx context.Context)
 	// Resume is the evaluation's checkpoint: questions it finished before a stop aren't asked
@@ -77,21 +79,24 @@ const (
 // TaskResult is one task in one pass. Numbers and fixed words only, like everything that leaves
 // the box: the answers themselves stay in the run's folder.
 type TaskResult struct {
-	ID           string `json:"id"`
-	Level        int    `json:"level"`
-	Status       string `json:"status"`
-	Turns        int    `json:"turns"`
-	Builds       int    `json:"builds"`
-	BuildFails   int    `json:"buildFails"`
-	Calls        int    `json:"calls"`   // MCP calls the server was sent
-	Fetches      int    `json:"fetches"` // lab.fetch calls made
-	Lookups      int    `json:"lookups"` // of both, the ones that answered
-	ModelMs      int64  `json:"modelMs"`
-	CellMs       int64  `json:"cellMs"` // building and running the programs
-	WallMs       int64  `json:"wallMs"` // the whole task, from opening the server to the grade
-	PromptTokens int    `json:"promptTokens"`
-	OutputTokens int    `json:"outputTokens"`
-	Forbidden    bool   `json:"forbidden,omitempty"` // called a tool the task says to leave alone
+	ID         string `json:"id"`
+	Level      int    `json:"level"`
+	Status     string `json:"status"`
+	Turns      int    `json:"turns"`
+	Builds     int    `json:"builds"`
+	BuildFails int    `json:"buildFails"`
+	Calls      int    `json:"calls"`   // MCP calls the server was sent
+	Fetches    int    `json:"fetches"` // lab.fetch calls made
+	Lookups    int    `json:"lookups"` // of both, the ones that answered
+	// Asked is the calls and fetches the site answered at all, a "no such listing" or a 404
+	// included: for a task whose right answer is NONE, being told it isn't there is the lookup
+	Asked        int   `json:"asked,omitempty"`
+	ModelMs      int64 `json:"modelMs"`
+	CellMs       int64 `json:"cellMs"` // building and running the programs
+	WallMs       int64 `json:"wallMs"` // the whole task, from opening the server to the grade
+	PromptTokens int   `json:"promptTokens"`
+	OutputTokens int   `json:"outputTokens"`
+	Forbidden    bool  `json:"forbidden,omitempty"` // called a tool the task says to leave alone
 	// Native is the tools the model called itself, in either mode; Path how it got there: native,
 	// program, both or none
 	Native int    `json:"native,omitempty"`
@@ -105,10 +110,21 @@ type TaskResult struct {
 }
 
 func (o *Options) tasks() []Task {
-	if o.Tasks != nil {
+	switch {
+	case o.Tasks != nil:
 		return o.Tasks
+	case o.Set.Tasks != nil:
+		return o.Set.Tasks
 	}
 	return Tasks
+}
+
+// set is the version of the set the evaluation runs.
+func (o *Options) set() string {
+	if o.Set.Version != "" {
+		return o.Set.Version
+	}
+	return Version
 }
 
 // RunTask puts one task to the model.
@@ -127,7 +143,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	j := o.Journal
 	j.Place(run, o.Model, "anchor-lab-eval", t.ID)
 	pass, passes := max(o.pass, 1), max(o.passes, 1)
-	j.Event(run, "eval.task", map[string]any{"task": t.ID, "level": t.Level, "harness": o.Version, "set": Version,
+	j.Event(run, "eval.task", map[string]any{"task": t.ID, "level": t.Level, "harness": o.Version, "set": o.set(),
 		"model": o.Model, "pass": pass, "passes": passes, "n": o.n, "of": o.of})
 
 	sess, tools, err := open(ctx, MCPURL(), o.UserAgent, o.Limits)
@@ -142,7 +158,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	before, errBefore := t.Want(ctx, src)
 
 	var mu sync.Mutex
-	fetches, fetchOK := 0, 0
+	fetches, fetchOK, fetchAsked := 0, 0, 0
 	var last time.Time
 	fetchTool := func(args json.RawMessage) gateway.Reply {
 		var a struct {
@@ -170,10 +186,16 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 		case err != nil:
 			return gateway.Reply{Error: clip(err.Error(), 200), Ms: ms}
 		case status != 200:
+			if status == 404 || status == 410 {
+				mu.Lock()
+				fetchAsked++ // the site answered: it isn't there
+				mu.Unlock()
+			}
 			return gateway.Reply{Error: fmt.Sprintf("HTTP %d", status), Text: clip(string(body), 2000), Ms: ms}
 		}
 		mu.Lock()
 		fetchOK++
+		fetchAsked++
 		mu.Unlock()
 		return gateway.Reply{OK: true, Text: string(body), Ms: ms}
 	}
@@ -191,7 +213,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	res.Path = path(res)
 
 	calls := sess.Calls()
-	mcpOK := 0
+	mcpOK, mcpAsked := 0, 0
 	forbid := map[string]bool{}
 	for _, n := range t.NoCall {
 		forbid[n] = true
@@ -204,6 +226,9 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 		if c.Status == "ok" {
 			mcpOK++
 		}
+		if c.Status == "ok" || c.Status == "tool_error" {
+			mcpAsked++ // the tool answered, if only to say there's no such thing
+		}
 		if forbid[c.Tool] {
 			res.Forbidden = true
 		}
@@ -214,7 +239,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 			res.Cut[c.Tool]++
 		}
 	}
-	res.Fetches, res.Lookups = fetches, mcpOK+fetchOK
+	res.Fetches, res.Lookups, res.Asked = fetches, mcpOK+fetchOK, mcpAsked+fetchAsked
 
 	res.Status = grade(ctx, t, src, before, errBefore, answer, gave, res)
 	res.WallMs = time.Since(started).Milliseconds()
@@ -237,8 +262,11 @@ func grade(ctx context.Context, t Task, src *Sources, before Answer, errBefore e
 	if res.Forbidden {
 		return StatusWrong
 	}
-	if !t.FromList && res.Lookups == 0 {
+	if !t.FromList && res.Lookups == 0 && !(t.NotFoundCounts && res.Asked > 0) {
 		return StatusWrong // an answer from memory: the question is about the site today
+	}
+	if t.Verify != nil {
+		return verified(ctx, t, src, errBefore, answer)
 	}
 	if errBefore == nil && Correct(t.Kind, t.Tol, before, answer) {
 		return StatusCorrect
@@ -252,6 +280,27 @@ func grade(ctx context.Context, t Task, src *Sources, before Answer, errBefore e
 		return StatusWrong
 	}
 	return skipOr(errAfter)
+}
+
+// verified grades a task with many right answers: the answer is checked against the site as the
+// harness last read it, and if that says no, against the site as it is now. When the rules can't
+// be met at all the task is skipped.
+func verified(ctx context.Context, t Task, src *Sources, errBefore error, answer string) string {
+	ok, err := t.Verify(ctx, src, answer)
+	if err == nil && ok {
+		return StatusCorrect
+	}
+	src.Fresh()
+	ok, err = t.Verify(ctx, src, answer)
+	switch {
+	case err == nil && ok:
+		return StatusCorrect
+	case err == nil:
+		return StatusWrong
+	case errBefore == nil && !errors.Is(err, ErrGone) && !errors.Is(err, ErrAmbiguous):
+		return StatusUnreachable
+	}
+	return skipOr(err)
 }
 
 func skipOr(err error) string {
@@ -478,6 +527,9 @@ type Score struct {
 	// NoTools is how many tasks, over every pass, the model's server refused tools for (a chat
 	// template that takes none): those went on with programs only
 	NoTools int `json:"noTools,omitempty"`
+	// From is the version a score was first graded under, when it's a run of an older version
+	// graded again from its journal and not run again (Rescore). Empty on a score made by a run.
+	From string `json:"from,omitempty"`
 }
 
 // ModeOf is a score's mode, code for one from before modes.
@@ -535,6 +587,7 @@ func RunN(ctx context.Context, o Options, n int) Score {
 		passes = append(passes, Run(ctx, o))
 	}
 	s := Fold(o.tasks(), passes)
+	s.V = o.set()
 	s.Model, s.Harness, s.Started, s.Ended = o.Model, o.Version, started, time.Now().UTC()
 	s.Mode = o.Mode
 	if s.Mode == "" {
@@ -634,6 +687,17 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 		s.Turns, s.Builds, s.BuildFails, s.Calls, s.Fetches, s.Native = s.Turns/n, s.Builds/n, s.BuildFails/n, s.Calls/n, s.Fetches/n, s.Native/n
 		s.ModelMs, s.PromptTokens, s.OutputTokens = s.ModelMs/int64(n), s.PromptTokens/n, s.OutputTokens/n
 	}
+	s.tally(tasks)
+	return s
+}
+
+// tally works out everything a score says about right and wrong from PerTask, each task's passes
+// right and passes scored: the tasks scored and right, by level, the steady, flaky and wrong
+// ones, the share and the Lab score. Fold ends with it, and Rescore runs it again after grading
+// some passes again.
+func (s *Score) tally(tasks []Task) {
+	s.Scored, s.Correct, s.Steady, s.Pct, s.Points = 0, 0, 0, 0, 0
+	s.ByLevel, s.OfLevel, s.Wrong, s.Flaky = [4]int{}, [4]int{}, nil, nil
 	for _, t := range tasks {
 		pt := s.PerTask[t.ID]
 		if pt[1] == 0 {
@@ -660,7 +724,6 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 		s.Pct = float64(int(1000*float64(s.Correct)/float64(s.Scored)+0.5)) / 10
 	}
 	s.Points = Points(s.ByLevel, s.OfLevel)
-	return s
 }
 
 // Points is the Lab score from the tasks right and scored at each level: harder tasks weigh more,
@@ -683,10 +746,13 @@ type Flip struct {
 	A, B [2]int
 }
 
-// Flips are the tasks one model gets right and the other doesn't, scored in both.
-func Flips(a, b Score) []Flip {
+// Flips are the normal set's tasks one model gets right and the other doesn't, scored in both.
+func Flips(a, b Score) []Flip { return FlipsIn(Tasks, a, b) }
+
+// FlipsIn is Flips over any set's tasks.
+func FlipsIn(tasks []Task, a, b Score) []Flip {
 	var out []Flip
-	for _, t := range Tasks {
+	for _, t := range tasks {
 		pa, oka := a.PerTask[t.ID]
 		pb, okb := b.PerTask[t.ID]
 		if !oka || !okb {
@@ -708,7 +774,7 @@ func Save(state string, s Score) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(state, File), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	f, err := os.OpenFile(filepath.Join(state, fileOf(s.V)), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
 	}
@@ -717,9 +783,26 @@ func Save(state string, s Score) error {
 	return err
 }
 
-// Load reads every score of this version of the set, best first.
-func Load(state string) ([]Score, error) {
-	b, err := os.ReadFile(filepath.Join(state, File))
+// fileOf is where a score of a set is kept: the hard set's in a file of their own, so the Lab
+// scores' file holds nothing else.
+func fileOf(version string) string {
+	if version == HardVersion {
+		return HardFile
+	}
+	return File
+}
+
+// Load reads every score of this version of the normal set, best first.
+func Load(state string) ([]Score, error) { return LoadSet(state, Normal()) }
+
+// LoadSet reads every score of this version of a set, best first.
+func LoadSet(state string, set Set) ([]Score, error) {
+	return loadVersion(state, set.File, set.Version)
+}
+
+// loadVersion reads the scores of one version from a scores file, best first.
+func loadVersion(state, file, version string) ([]Score, error) {
+	b, err := os.ReadFile(filepath.Join(state, file))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -729,7 +812,7 @@ func Load(state string) ([]Score, error) {
 	var out []Score
 	for _, line := range bytes.Split(b, []byte("\n")) {
 		var s Score
-		if json.Unmarshal(line, &s) == nil && s.V == Version {
+		if json.Unmarshal(line, &s) == nil && s.V == version {
 			out = append(out, s)
 		}
 	}
@@ -789,9 +872,14 @@ type CheckLine struct {
 // failing is one to fix before the evaluation runs, not after: it says the data moved (a listing
 // gone, a tie) or the site didn't answer.
 func Check(ctx context.Context, src *Sources, tools []gateway.Tool) []CheckLine {
+	return CheckTasks(ctx, Tasks, src, tools)
+}
+
+// CheckTasks is Check for any set's tasks.
+func CheckTasks(ctx context.Context, tasks []Task, src *Sources, tools []gateway.Tool) []CheckLine {
 	src.MCPTools = tools
 	var out []CheckLine
-	for _, t := range Tasks {
+	for _, t := range tasks {
 		a, err := t.Want(ctx, src)
 		out = append(out, CheckLine{ID: t.ID, Level: t.Level, Answer: a.Value, Err: err})
 	}

@@ -273,6 +273,101 @@ small, they use the standard library only, and they treat everything above as da
   level 2 task counting twice and a level 3 task three times, out of the tasks scored, weighted the
   same way, so two models that both get every easy question right are told apart by the hard ones.
   Scores are ranked by it, and it's what the site shows on a model's listing.
+- **A model the box can't run gets the same grading.** The scores on the site were all from the
+  box, so nothing said how hard the set is for a model that isn't. Vlad, 21 November 2026, of the
+  first eleven Lab scores: "did we make it too easy? or it just normal usage? how would you do on
+  it?", then "yeah, run it". `anchor-lab eval -questions` prints what a model in the harness is
+  told, `-snapshot <file>` writes the right answers to a file and prints none of them, and
+  `-grade <answers> -before <snapshot>` grades answers made elsewhere with `eval.GradeGiven`, which
+  ends in the same `grade` a task on the box does. What was called comes from a log of the calls,
+  never from the model's account of itself. Several files are passes of one model and fold as an
+  evaluation's passes do. The set's author can't take it honestly, so the rule for a run by hand
+  is Vlad's: "make sure the context is all gone when they run the tests, same for you, new
+  instance running with no history". Each pass is a new instance given the brief and a logged
+  runner and nothing else. What this can't copy is the harness: its turn limit, its cells, a new
+  conversation for every question. So such a score is printed with "graded outside the harness",
+  is never written to `eval.ndjson`, and is never ranked beside the box's.
+- **The hard set is kept beside the normal one, and isn't the Lab score.** Three hosted models
+  put through the normal set that way all scored 100 (below, "What was run"), and the best local
+  model scores 98, so the set is near its ceiling. Vlad: "can we have a hard one as well, we'll
+  keep it for the new versions if it gets saturated for now we still run the normal one", and "i
+  want somethinh hard enough for haiku to not necessary get 100%". `eval/hard.go` is 66 questions
+  under their own version, `anchor-lab-eval-hard/1`, run with `-set hard`. The normal set stays
+  the default, the one the admin page asks for and the only one ranked, because eleven models
+  already have a Lab score on it and a score on a different set can't sit in the same column. So
+  the hard set touches nothing the Lab score reads: its scores are in `eval-hard.ndjson`
+  (`eval.Load` reads only the normal set's file), `/v1/evals` doesn't serve them, its checkpoints
+  are in `eval/resume/hard/` so a model stopped half way through the normal set keeps that
+  checkpoint, and its request in the inbox is `eval-hard-<model>.request` with `hard` on its third
+  line (`journal.EvalSet`). In the stats it's an evaluation like any other, with no new word, so
+  the site's side needs no change until it wants to show hard scores. When the normal set is
+  retired, that's a decision of its own and a change on the site in the same pull request.
+- **What makes a question hard is steps, a plan and a deliverable, not obscurity.** Every hard
+  question still has its answer worked out from the public API when it runs, and its wording says
+  which rows count (ranked or all, at or above a grade, ties broken how, and a listing's category
+  as the rankings file gives it, because the categories file also lists a listing under the
+  categories it's "also in"). The set was written three times against Haiku, on Vlad's test for
+  it. The first 44 questions were joins, arithmetic with the benchmark's weights, a page to read
+  past the 12,000 characters a direct call returns, and near-miss traps (a slug one word off, a
+  real model under the wrong provider, a category one letter short, a count that's 0 and not
+  NONE). Haiku got all 44 in three passes out of three. What a model that good gets wrong isn't
+  the arithmetic, so the next thirteen and the three after them went after the plan: questions
+  that need a listing's own JSON for more listings than the 40 fetches a question gets (50, 60,
+  61, 80, 177). The model isn't told the limit. It finds out when a fetch is refused, and the way
+  through is to see that `search_tools` filters on the same field and says how many match, or
+  that `get_tool` reads a listing on a count of its own. That was the first thing to cost Haiku a
+  question. Then Vlad: "maybe more open ended questions, that need a lot more work, at least a
+  few". Six work tasks have something to hand in: a stack of four listings that keeps four rules
+  and comes within three points of the best total possible, two ordered lists, an audit of where
+  two of our files disagree, a report of four numbers, and a count by company over 45 listings.
+  The stack has many right answers, so a task can carry a verifier (`Task.Verify`) that says
+  whether this answer is one of them, and its `Want` gives one as an example or says the rules
+  can no longer be met. An answer can also be a list in order, a list in any order or several
+  numbers (`InOrder`, `AnyOrder`, `Numbers` in `eval/check.go`), compared part by part. A question
+  two rows would tie on, or a rounding could decide, has no answer for that pass (`ErrAmbiguous`),
+  as in the normal set. Every task is tested on a made-up site whose answers are known by
+  construction (`eval/hard_test.go`), so the tasks' own sums were checked without reading the
+  real answers.
+- **A run by hand keeps the lab's limits.** The first runs by hand had none: a fetch of any size,
+  any number of calls. The runner used for them now refuses the 41st fetch and the 41st tool call
+  of a question, a fetch over 4 MB and more than 32 KB of a tool's answer, as the gateway does
+  (`gateway.DefaultLimits`, `eval.MaxFetch`), because a question about planning inside a limit
+  means nothing without the limit. It still isn't the harness: one conversation runs the whole
+  pass, so what a model learns about our data on the first question it keeps for the rest, where
+  on the box every question starts cold with 16 turns.
+- **Being told it isn't there is a lookup, for the hard set's traps.** "An answer with no lookup
+  behind it is wrong" counts only lookups that answered: a fetch that came back 200, a tool call
+  that wasn't an error. For a task whose right answer is NONE that's backwards. `get_tool` answers
+  a slug that doesn't exist with a tool error, and `/api/v1/tools/<slug>.json` with a 404, and a
+  model that asks exactly that and answers NONE has done the task and is marked wrong unless it
+  also made some other call that worked. The runs by hand showed it: Haiku and Sonnet each lost
+  NONE questions in a pass where their only lookup was the 404. So a hard task can say
+  `NotFoundCounts`, and its three NONE traps do: a 404 or a 410 from the site, or a tool that
+  answered with an error, is the lookup (`TaskResult.Asked`). The normal set's four NONE traps
+  had the same flaw. They couldn't be changed in place: how an answer is checked is part of a
+  set's version, the eleven Lab scores were made under `anchor-lab-eval/1`, and changing the rule
+  under them would make new scores and old ones differ for a reason nobody can see. The next
+  decision is what was done about it.
+- **The normal set's traps are fixed in a second version, and the saved runs are graded again,
+  not run again.** A new version usually means every model runs again, which was about 67 hours
+  of the box for eleven models. Vlad, 22 November 2026, chose to grade the saved runs again
+  instead. It's sound here because `anchor-lab-eval/2` asks the same 59 questions and changes
+  one check, and a run's journal already holds what that check needs: each question's
+  `answer.txt`, and how every call and fetch ended. So `eval.Rescore` reads a score's own run
+  and looks at the four NONE traps only. A pass changes when it was marked wrong, no lookup
+  answered, at least one was answered with "it isn't there" (a 404 or a 410, a tool's error) and
+  the answer was NONE. It can only go from wrong to right. The run's time, tokens and every other
+  task stand as they were, and the new score says where it came from (`from` on the score, the
+  version it was first graded under). No model is asked and the site isn't read. Where the
+  journal and the saved score count a trap's passes differently, or a pass isn't in the journal,
+  that task is left as it was, which can only keep a score lower than it should be. A score
+  whose run isn't in the journal at all isn't carried: that model has no score of version 2
+  until it runs again. The harness does this itself when it starts (`carryScores`), because a
+  box that serves version 2 with no scores in it would empty the site's page until somebody
+  remembered a command, and it writes one event a model with the score before and after
+  (`eval.rescored`). `anchor-lab eval -rescore` prints the same thing and keeps nothing, so the
+  change can be read before the harness that makes it is installed. Both versions' scores stay
+  in `eval.ndjson`: version 1's are the record of what was published under it.
 - **What the lab is doing shows where Vlad looks.** Vlad, 18 November 2026, of the admin page's Lab
   tab: "i should see what it's doing on the lab page, that's where i wanted it". The stats carry
   the evaluation in progress (which question of which pass, how many right, wrong and skipped so
@@ -566,12 +661,47 @@ real run, because the page should be shaped by what the results look like.
 - Run against real servers: `connect` only, once each, against Exa's and ReqRes's hosted MCP
   servers. Both opened and listed their tools (2 and 12). Of ReqRes's 12, 8 are named like a change
   (`create_project`, `patch_record` and so on) and were marked not to call.
+- Run by hand, 21 November 2026: Claude Haiku 5.5, Sonnet 5.5 and Fable 5.2 through both sets,
+  three passes each. Every pass was a new instance with no history, given what `eval -questions`
+  prints and a logged runner and nothing else, and graded with `eval -grade` against a snapshot
+  written before the batch started (Decisions, "A model the box can't run gets the same
+  grading"). None of it is in `eval.ndjson`, and none of it was made in the harness: one
+  conversation ran a whole pass, in Python, with no limit on replies.
+  - The normal set, 59 questions. All three got 59 of 59 with the passes counted together, a Lab
+    score of 100. Fable was right in every pass on all 59, Haiku on 55 and Sonnet on 51. Nobody
+    gave a wrong answer in nine passes: every miss in a single pass was a right answer with no
+    lookup counted behind it, either a file reused from an earlier question (which a model on
+    the box can't do) or a 404 as the only lookup on a NONE trap (the flaw the set's second
+    version fixes).
+    The best local model's Lab score is 98, so the normal set no longer tells the top apart. A
+    pass over the 59 took between two and a half and ten minutes from its first call to its last.
+  - The hard set, 66 questions, with the lab's limits enforced by the runner. Fable 66, 66 and
+    66 right, a score of 100. Sonnet 62, 64 and 64, 65 right with the passes counted together,
+    98. Haiku 64, 62 and 55, 63 right, 95, and right in every pass on 53. What cost them: the
+    licence count over 60 listings that doesn't fit one call budget (Haiku left it blank three
+    times), leaders counted with unranked listings among them, a grade worked out without taking
+    the deduction off, a `license` read from the file's own metadata instead of the listing's,
+    and in one of Haiku's passes nine right answers with no lookup of their own. One question
+    was reworded after these runs: "whose listings record the MIT licence" let a listing under
+    "MIT and Apache-2.0" in, Fable read it that way three times, and the key didn't. Either
+    reading is counted right in the numbers above. Held to the key as it was, Fable is 65 of 66
+    and 98, and Haiku 93. Two ratio questions and the three licence questions were reworded for
+    the same reason, with no change to their answers.
+  - The first two versions of the hard set, 44 and then 57 questions, were run on Haiku alone:
+    44 of 44 in all three passes, then 57, 55 and 56 of 57.
+  - Not run: the hard set by any model on the box, or any hosted model inside the harness, which
+    refuses a model that isn't on this machine. Until the box has run it, the hard set's
+    difficulty for a local model is a guess.
 - Not run: the units on a real machine, and `explore` with a real model against a real server. The
   first run on the box is the test of both. The likeliest thing to need a change is the cell
   unit's system call filter, which fails closed: a cell that can't build says so in the journal.
 
 ## Open
 
+- **What grading the eleven saved runs again changes.** `eval.Rescore` is tested on made-up
+  journals, not on the box's. The four traps are level 2, so a model can gain up to 8 of the 110
+  weighted points. `anchor-lab eval -rescore` on the box says what each model gains, before the
+  harness that keeps the new scores is installed.
 - **HTTP APIs.** Over half the listings on the site are plain APIs, not MCP servers. They need a second kind of call in
   the gateway (same address check, same limits) driven by the listing's OpenAPI file.
 - **Tasks with a right answer.** `explore` measures whether a tool can be called. Task success

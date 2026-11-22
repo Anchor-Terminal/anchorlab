@@ -304,15 +304,15 @@ it with the same name runs with the build.
 
 Over half of what Anchor Terminal lists is an API with no MCP server in front of it, and what an
 agent does with one is write a small integration from the API's own description. The lab tests
-those the same way it tests an MCP server. It reads the API's OpenAPI document and hands the model
-each operation as a tool: a name, what the operation says it does, and its path and query
-parameters as the arguments. `tool.Call` on one is a request to the API, made by the harness, so
+those the same way it tests an MCP server. It reads the API's OpenAPI document, in JSON or YAML,
+and hands the model each operation as a tool: a name, what the operation says it does, and its
+path and query parameters as the arguments. `tool.Call` on one is a request to the API, made by the harness, so
 the cell still has no network.
 
 ```
 anchor-lab api -openapi https://api.example.com/openapi.json                     # its operations, as the lab reads them
 anchor-lab api -openapi https://api.example.com/openapi.json -model qwen3.8-27b  # and a model calls the GET ones
-anchor-lab api -openapi https://docs.example.com/openapi.json -url https://api.example.com/v2
+anchor-lab api -openapi https://docs.example.com/openapi.yaml -url https://api.example.com/v2
 ```
 
 `anchor-lab api` is a look: it runs once in this process, prints each operation with whether it
@@ -326,8 +326,20 @@ the API wanting a key, a 4xx comes back to the program with the API's own words 
 request, and a 5xx is the API failing. A run offers a model 60 GET operations at most, in the order
 the document's paths sort, and leaves out the deprecated ones.
 
-Not yet: a document in YAML (the standard library has no reader for it), a request with a body, a
-key, header and cookie parameters, and the site's list naming which listings are APIs.
+Go's standard library has no YAML reader and the harness takes no dependency, so it has its own
+(`yaml/`), which turns a description in YAML into the same JSON and carries on from there. It reads
+the YAML the OpenAPI specification asks for: version 1.2, JSON's kinds of value, and keys that are
+strings. It refuses a complex key (a line that starts with `?`), skips a tag other than `!!str`,
+reads only the first document in a file, and takes a description of up to 32 MB. DESIGN.md has what
+it was checked against. To run the same checks yourself:
+
+```
+ANCHOR_LAB_YAML_DIR=<folder> go test ./yaml ./gateway   # descriptions of your own, each with its JSON beside it if it has one
+ANCHOR_LAB_YAML_SUITE=<folder> go test ./yaml           # YAML's own test suite, the data branch of yaml/yaml-test-suite
+```
+
+Not yet: a request with a body, a key, header and cookie parameters, a description split over
+several files, and the site's list naming which listings are APIs.
 
 ## The evaluation
 

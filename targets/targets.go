@@ -29,10 +29,10 @@ type Target struct {
 	// the lab finds under research/<model>/<company>/<tool>/. Optional: a list without it files
 	// under "unknown".
 	Company string `json:"company,omitempty"`
-	// OpenAPI is the address of the listing's OpenAPI document, in JSON, when what the lab tests
-	// is a plain HTTP API and not an MCP server. URL is then where the API's requests go, and may
-	// be empty to take the document's own server address. Optional: a list without it is all MCP
-	// servers, as every list was before.
+	// OpenAPI is the address of the listing's OpenAPI document, in JSON or YAML, when what the
+	// lab tests is a plain HTTP API and not an MCP server. URL is then where the API's requests
+	// go, and may be empty to take the document's own server address. Optional: a list without
+	// it is all MCP servers, as every list was before.
 	OpenAPI string `json:"openapi,omitempty"`
 }
 

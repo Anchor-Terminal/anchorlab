@@ -122,6 +122,44 @@ small, they use the standard library only, and they treat everything above as da
   address of the description, and a list without it means what it always meant.
   `anchor-lab api` tries one API by hand and keeps nothing. Tested against made-up APIs, with real
   compiled programs, and not yet against a real one.
+- **The harness reads YAML itself.** Vlad, 22 November 2026: "let's add a YAML reader to the
+  harness, we should be able to read that". An API's description is JSON or YAML, Go's standard
+  library reads only the first, and no dependency gets added here, so the lab has a reader of its
+  own (`yaml/`). It turns YAML into the values `encoding/json` would have made of the same
+  document, and `gateway.OpenAPI` carries on with it as JSON, so there's one path after the
+  reading and not two. What it reads is what the OpenAPI specification asks a description in YAML
+  to be: YAML 1.2, JSON's kinds of value, keys that are strings. That's block and flow mappings
+  and lists, plain and quoted scalars, literal and folded blocks, comments, anchors, aliases and
+  merge keys. By 1.2's rules `yes` and `no` are words, and a number keeps the text it was written
+  with, so `swagger: 2.0` is still 2.0. It refuses a complex key (a line that starts with `?`),
+  skips a tag other than `!!str`, and reads the first document in a file. It's a reader and not a
+  validator: a description with a stray comma or a comment in the wrong place still reads.
+  The input is a stranger's, so it's bounded. A document can't come to more than 2,000,000
+  values, the copies its aliases make included, so a small file whose aliases multiply is refused
+  and not expanded. It can't nest past 120 levels. Every line is read once however long a quote or
+  a bracket stays open. Nothing in a document makes it panic, which a test over random pieces of
+  YAML and a fuzz target hold it to. The description gets a size limit of its own, 32 MB
+  (`gateway.MaxSpec`), where it had an answer's 4 MB: it's read once a run, a model never sees it
+  whole, and GitHub's is 11 MB.
+  Checked on 22 November 2026 against three things. Stripe's description (6.6 MB) and GitHub's
+  (11 MB), which are each published in YAML and in JSON: both read as the same document as their
+  JSON, apart from 4 example values in GitHub's (`0.16001e0`) that are a number by YAML 1.2 and
+  text by 1.1. The APIs.guru directory (commit f04b8d0, 4,138 descriptions, 750 MB): all 4,138
+  read, and 4,103 are the same document PyYAML's libyaml reader makes of them with the same rules
+  for plain scalars. The other 35 PyYAML refuses (32 for a tab at the start of a block, 2 for a
+  control character, 1 for a U+2028, which ends a line in YAML 1.1 and not in 1.2), so there was
+  nothing to compare them with. And YAML's own test suite (`yaml/yaml-test-suite`, 402 cases): of
+  the 279 valid ones it gives the JSON for, 260 read as that JSON, 19 are refused (13 of them for
+  a complex key) and none is read as something else. Of its 94 cases that aren't YAML, 51 are
+  refused and 43 read. `ANCHOR_LAB_YAML_DIR` and `ANCHOR_LAB_YAML_SUITE` run those checks again
+  (README). PyYAML was only the check, and isn't in the repository or on the box.
+  Through the gateway, 3,293 of the 4,103 open as the same API from YAML as from JSON, with the
+  same address, operations and arguments, and 810 are refused the same way: 395 have no GET
+  operation, 390 have a server address with variables in it, 14 aren't OpenAPI documents with
+  paths, 10 give an address the lab won't call, and 1 is over 32 MB (Microsoft Graph's beta, at
+  58 MB). The target list's `openapi` still means the address of the description, and what's at
+  it may now be YAML. What none of this shows is whether a model can call an API from its
+  description. No real API has been called yet.
 - **The model is on the box and the prompts stay there.** The harness refuses a model address that
   isn't this machine.
 - **One machine with unified memory, more as it pays.** A Ryzen AI Max+ 395 with 128 GB, about 100
@@ -607,10 +645,13 @@ real run, because the page should be shaped by what the results look like.
   on the router or the switch that doesn't depend on the box is still to do.
 - **How long transcripts are kept** on the box, and whether a sample is read by a person or a
   frontier model each week.
-- **HTTP APIs, the rest.** The first item of this list is from before the lab could test one. It now reads an OpenAPI document in JSON and sends GET requests with
-  path and query parameters (Decisions, "A plain HTTP API is tested the way an MCP server is").
-  Still to do: the site's list saying which listings are APIs and where their description is, and
-  the site taking their results. A document in YAML, which most APIs publish, and which needs a
-  reader the standard library doesn't have. Keys, which is most APIs worth testing. Header
-  parameters. A way to test a POST that only reads, such as a search, without sending one that
-  writes. And an API with no description at all, where the model would have to read the docs.
+- **HTTP APIs, the rest.** The first item of this list is from before the lab could test one. It
+  now reads an OpenAPI document in JSON or YAML and sends GET requests with path and query
+  parameters (Decisions, "A plain HTTP API is tested the way an MCP server is" and "The harness
+  reads YAML itself"). Still to do: the site's list saying which listings are APIs and where
+  their description is, and the site taking their results. Keys, which is most APIs worth testing.
+  A server address with variables in it, which the lab refuses and 390 of the 4,103 descriptions
+  read from the APIs.guru directory have, though the specification gives each variable a default
+  to use. Header parameters. A description split over several files. A way to test a POST that
+  only reads, such as a search, without sending one that writes: 395 of those 4,103 have no GET
+  operation at all. And an API with no description, where the model would have to read the docs.

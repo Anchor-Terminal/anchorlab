@@ -1,8 +1,10 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +14,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/Anchor-Terminal/anchorlab/yaml"
 )
 
 // A plain HTTP API, tested the way an MCP server is. Over half of what Anchor Terminal lists is an
@@ -23,8 +27,13 @@ import (
 // between requests, the same limits on a run's calls and on an answer's size, and nothing that
 // changes anything. For an API that last rule is the method: only GET is sent.
 //
-// What isn't here yet: a document in YAML (the standard library has no reader for it), a request
-// with a body, a key, and header or cookie parameters.
+// The document is JSON or YAML. The YAML is read by the lab's own reader (package yaml) and carried
+// on as JSON. What isn't here yet: a request with a body, a key, and header or cookie parameters.
+
+// MaxSpec is how big an API's description may be. It's read once a run and a model never sees it
+// whole, so it isn't held to the size of an answer, and the big ones are big: GitHub's was 11 MB
+// in YAML and 14 MB in JSON on 22 November 2026.
+const MaxSpec = 32 << 20
 
 // MaxOperations is how many of an API's GET operations a run offers a model, in the order the
 // document's paths sort. A run's calls can't cover more, and a big API has hundreds.
@@ -67,9 +76,9 @@ func (s *Session) Operations() (all, reads, offered int) {
 	return s.api.All, s.api.Reads, s.api.Offered
 }
 
-// OpenAPI opens an HTTP API from its OpenAPI document, in JSON, at specURL. base is where the
-// API's requests go. Empty takes the document's first server, and a document with none means the
-// address the document came from. The tools are the API's operations: every GET one, up to
+// OpenAPI opens an HTTP API from its OpenAPI document, in JSON or YAML, at specURL. base is where
+// the API's requests go. Empty takes the document's first server, and a document with none means
+// the address the document came from. The tools are the API's operations: every GET one, up to
 // MaxOperations, and every other one marked as changing something, which the lab never calls.
 func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (*Session, []Tool, error) {
 	if err := CheckURL(specURL); err != nil {
@@ -82,7 +91,7 @@ func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (
 		return nil, nil, &ErrStatus{"refused", err.Error()}
 	}
 	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Accept", "application/json, application/yaml, text/yaml, */*;q=0.5")
 	resp, err := client.Do(req)
 	if err != nil {
 		if isTimeout(err) {
@@ -91,20 +100,29 @@ func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (
 		return nil, nil, &ErrStatus{"unreachable", clip(err.Error(), 300)}
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, lim.MaxBody+1))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, MaxSpec+1))
 	switch {
 	case resp.StatusCode == 401 || resp.StatusCode == 403:
 		return nil, nil, &ErrStatus{"auth", fmt.Sprintf("HTTP %d for the description", resp.StatusCode)}
 	case resp.StatusCode != 200:
 		return nil, nil, &ErrStatus{"error", fmt.Sprintf("HTTP %d for the description", resp.StatusCode)}
-	case err != nil || int64(len(raw)) > lim.MaxBody:
-		return nil, nil, &ErrStatus{"error", fmt.Sprintf("the description is over %d bytes, or stopped part way", lim.MaxBody)}
+	case err != nil || len(raw) > MaxSpec:
+		return nil, nil, &ErrStatus{"error", fmt.Sprintf("the description is over %d bytes, or stopped part way", MaxSpec)}
 	}
 	listMs := int(time.Since(start).Milliseconds())
+	// JSON starts with a brace and is JSON. Anything else is read as YAML and carried on as JSON,
+	// which takes in JSON with a byte order mark in front and YAML written in braces
+	if first := bytes.TrimLeft(raw, " \t\r\n"); len(first) == 0 || first[0] != '{' || !json.Valid(raw) {
+		converted, err := yaml.JSON(raw)
+		if err != nil {
+			return nil, nil, &ErrStatus{"error", "the description is neither JSON nor YAML the lab can read: " + clip(err.Error(), 200)}
+		}
+		raw = converted
+	}
 
 	var doc struct {
-		OpenAPI string `json:"openapi"`
-		Swagger string `json:"swagger"`
+		OpenAPI json.RawMessage `json:"openapi"` // a string, or in YAML sometimes a bare 3.1
+		Swagger json.RawMessage `json:"swagger"`
 		Info    struct {
 			Title string `json:"title"`
 		} `json:"info"`
@@ -121,14 +139,13 @@ func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (
 		} `json:"components"`
 	}
 	version := ""
-	if json.Unmarshal(raw, &doc) == nil {
-		version = doc.OpenAPI
-		if version == "" {
-			version = doc.Swagger
+	if lenient(raw, &doc) {
+		if version = bare(doc.OpenAPI); version == "" {
+			version = bare(doc.Swagger)
 		}
 	}
 	if version == "" || len(doc.Paths) == 0 {
-		return nil, nil, &ErrStatus{"error", "not an OpenAPI document in JSON with paths in it"}
+		return nil, nil, &ErrStatus{"error", "not an OpenAPI document with paths in it"}
 	}
 
 	if base == "" {
@@ -179,7 +196,7 @@ func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (
 		Schema      json.RawMessage `json:"schema"`
 		Type        string          `json:"type"` // Swagger 2
 	}, ok bool) {
-		if json.Unmarshal(raw, &p) != nil {
+		if !lenient(raw, &p) {
 			return p, false
 		}
 		if p.Ref != "" {
@@ -188,7 +205,7 @@ func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (
 			if !found {
 				def, found = doc.Parameters[name]
 			}
-			if !found || json.Unmarshal(def, &p) != nil {
+			if !found || !lenient(def, &p) {
 				return p, false
 			}
 		}
@@ -197,7 +214,9 @@ func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (
 
 	paths := make([]string, 0, len(doc.Paths))
 	for p := range doc.Paths {
-		paths = append(paths, p)
+		if strings.HasPrefix(p, "/") { // and not an x- extension beside the paths
+			paths = append(paths, p)
+		}
 	}
 	sort.Strings(paths)
 	var tools []Tool
@@ -218,7 +237,7 @@ func OpenAPI(ctx context.Context, specURL, base, userAgent string, lim Limits) (
 				Deprecated  bool              `json:"deprecated"`
 				Parameters  []json.RawMessage `json:"parameters"`
 			}
-			if json.Unmarshal(rawOp, &op) != nil {
+			if !lenient(rawOp, &op) {
 				continue
 			}
 			spec.All++
@@ -382,6 +401,27 @@ func (s *Session) callAPI(ctx context.Context, c Call, name string, args map[str
 	}
 	s.record(c)
 	return r
+}
+
+// lenient reads JSON into v and lets a value of the wrong kind pass: a description written by
+// hand, in YAML most of all, has a number where a string belongs often enough, and the rest of
+// the document is still good.
+func lenient(data []byte, v any) bool {
+	err := json.Unmarshal(data, v)
+	var kind *json.UnmarshalTypeError
+	return err == nil || errors.As(err, &kind)
+}
+
+// bare is a JSON string's text, or a number's as it's written.
+func bare(raw json.RawMessage) string {
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	if t := strings.TrimSpace(string(raw)); t != "null" && !strings.ContainsAny(t, "{[\"") {
+		return t
+	}
+	return ""
 }
 
 // isText says whether an answer is text a program can read: valid UTF-8 with no control

@@ -7,6 +7,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -200,8 +204,16 @@ func TestOpenAPIRefuses(t *testing.T) {
 		}
 		return ""
 	}
-	if _, err := open(srv.URL+"/openapi.yaml", ""); status(err) != "error" || !strings.Contains(err.Error(), "JSON") {
-		t.Errorf("a description in YAML: %v", err)
+	if _, err := open(srv.URL+"/openapi.yaml", ""); status(err) != "error" || !strings.Contains(err.Error(), "paths") {
+		t.Errorf("a description with no paths: %v", err)
+	}
+	answer = "openapi: 3.0.3\npaths:\n\t/a: {}\n"
+	if _, err := open(srv.URL+"/openapi.yaml", ""); status(err) != "error" || !strings.Contains(err.Error(), "neither JSON nor YAML") {
+		t.Errorf("a description that's broken YAML: %v", err)
+	}
+	answer = "<html><body>Not found</body></html>"
+	if _, err := open(srv.URL+"/openapi.yaml", ""); status(err) != "error" {
+		t.Errorf("a page that isn't a description: %v", err)
 	}
 	if _, err := open(srv.URL+"/gone.json", ""); status(err) != "error" {
 		t.Errorf("a description that isn't there: %v", err)
@@ -217,7 +229,17 @@ func TestOpenAPIRefuses(t *testing.T) {
 	if _, err := open(srv.URL+"/openapi.json", ""); status(err) != "error" || !strings.Contains(err.Error(), "variables") {
 		t.Errorf("a server address with variables: %v", err)
 	}
+	// a description past what one may weigh, which is its own limit and not an answer's
+	answer = `{"openapi":"3.1.0","paths":{"/a":{"get":{}}},"x-padding":"` + strings.Repeat("x", int(lim.MaxBody)) + `"}`
+	if _, err := open(srv.URL+"/openapi.json", ""); err != nil {
+		t.Errorf("a description bigger than an answer may be: %v", err)
+	}
+	answer = "openapi: 3.1.0\n" + strings.Repeat("#", MaxSpec)
+	if _, err := open(srv.URL+"/openapi.yaml", ""); status(err) != "error" || !strings.Contains(err.Error(), "over") {
+		t.Errorf("a description over the limit: %v", err)
+	}
 	// the API's address, given: used as it is
+	answer = `{"openapi":"3.1.0","servers":[{"url":"https://{region}.example.com"}],"paths":{"/a":{"get":{}}}}`
 	if s, err := open(srv.URL+"/openapi.json", srv.URL+"/api/"); err != nil || s.URL != srv.URL+"/api" {
 		t.Errorf("a given address: %v", err)
 	}
@@ -226,5 +248,180 @@ func TestOpenAPIRefuses(t *testing.T) {
 	s, tools, err := OpenAPI(context.Background(), srv.URL+"/swagger.json", "", "anchor-lab/test", lim)
 	if err != nil || s.URL != srv.URL+"/v2" || len(tools) != 1 || tools[0].Name != "get_a" || !strings.Contains(string(tools[0].InputSchema), `"integer"`) {
 		t.Errorf("Swagger 2: %v %+v", err, tools)
+	}
+	// JSON behind a byte order mark, and YAML written in braces, both read
+	for name, body := range map[string]string{
+		"JSON with a byte order mark": "\xef\xbb\xbf" + `{"openapi":"3.1.0","paths":{"/a":{"get":{}}}}`,
+		"YAML in braces":              `{openapi: 3.1.0, paths: {/a: {get: {}}}}`,
+	} {
+		answer = body
+		if _, tools, err := OpenAPI(context.Background(), srv.URL+"/openapi", srv.URL, "anchor-lab/test", lim); err != nil || len(tools) != 1 || tools[0].Name != "get_a" {
+			t.Errorf("%s: %v %+v", name, err, tools)
+		}
+	}
+	// and in YAML its version is often written bare, which makes it a number and not "2.0"
+	answer = "swagger: 2.0\nhost: " + strings.TrimPrefix(srv.URL, "http://") + "\nbasePath: /v2\nschemes: [http]\npaths:\n  /a:\n    get:\n      parameters:\n      - name: q\n        in: query\n        type: integer\n"
+	s, tools, err = OpenAPI(context.Background(), srv.URL+"/swagger.yaml", "", "anchor-lab/test", lim)
+	if err != nil || s.Protocol != "openapi/2.0" || s.URL != srv.URL+"/v2" || len(tools) != 1 || tools[0].Name != "get_a" || !strings.Contains(string(tools[0].InputSchema), `"integer"`) {
+		t.Errorf("Swagger 2 in YAML: %v %+v %+v", err, s, tools)
+	}
+}
+
+// The same API described in YAML, the way people write it by hand, opens as the same tools.
+func TestOpenAPIInYAML(t *testing.T) {
+	defer AllowLoopbackForTests()()
+	const inYAML = `# the pets API
+openapi: 3.1
+info:
+  title: Pets
+servers:
+- url: /v1
+components:
+  parameters:
+    petId: &petId
+      name: petId
+      in: path
+      required: true
+      schema: {type: string}
+paths:
+  /pets:
+    get:
+      operationId: listPets
+      summary: List pets   # all of them
+      description: |
+        A long description
+        over two lines.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+        - name: tag
+          in: query
+          schema: {type: array, items: {type: string}}
+        - {name: X-Trace, in: header, schema: {type: string}}
+    post:
+      operationId: createPet
+      summary: Add a pet
+  /pets/{petId}:
+    parameters:
+      - $ref: '#/components/parameters/petId'
+    get:
+      summary: >-
+        One
+        pet
+    delete:
+      operationId: "delete pet!"
+      summary: Remove a pet
+  /old: {get: {operationId: oldThing, deprecated: true}}
+  /secret:
+    get: {operationId: secret}
+  /boom:
+    get:
+      operationId: boom
+  /big:
+    get:
+      operationId: big
+  x-internal: not a path
+`
+	var got []string
+	api := petsAPI(t, &got)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml")
+		w.Write([]byte(inYAML))
+	}))
+	defer srv.Close()
+	lim := DefaultLimits
+	lim.MinInterval = 0
+	ctx := context.Background()
+	fromJSON, wantTools, err := OpenAPI(ctx, api.URL+"/openapi.json", "", "anchor-lab/test", lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, tools, err := OpenAPI(ctx, srv.URL+"/openapi.yaml", api.URL+"/v1", "anchor-lab/test", lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Protocol != "openapi/3.1" || s.Server != "Pets" || s.URL != fromJSON.URL || len(tools) != len(wantTools) {
+		t.Fatalf("the session: %s %s %s, %d tools of %d", s.Protocol, s.Server, s.URL, len(tools), len(wantTools))
+	}
+	for i, want := range wantTools {
+		got := tools[i]
+		if got.Name != want.Name || string(got.InputSchema) != string(want.InputSchema) {
+			t.Errorf("tool %d: %s %s, want %s %s", i, got.Name, got.InputSchema, want.Name, want.InputSchema)
+		}
+		if a, b := Callable(got); a != func() bool { ok, _ := Callable(want); return ok }() {
+			t.Errorf("%s callable: %v %s", got.Name, a, b)
+		}
+	}
+	if d := tools[2].Description; d != "GET /pets. List pets" {
+		t.Errorf("a summary with a comment after it: %q", d)
+	}
+	if d := tools[4].Description; d != "GET /pets/{petId}. One pet" {
+		t.Errorf("a folded summary: %q", d)
+	}
+	if r := s.CallTool(ctx, "get_pets_petId", json.RawMessage(`{"petId": "rex"}`)); !r.OK || len(got) != 1 || got[0] != "GET /v1/pets/rex" {
+		t.Errorf("a call: %+v, sent %v", r, got)
+	}
+}
+
+// Real descriptions, for whoever has some: with ANCHOR_LAB_YAML_DIR set to a folder, every .yaml
+// or .yml file in it that has a .json file of the same name beside it has to open as the same API
+// either way: the same address, the same operations with the same arguments, or the same refusal.
+func TestRealDescriptions(t *testing.T) {
+	dir := os.Getenv("ANCHOR_LAB_YAML_DIR")
+	if dir == "" {
+		t.Skip("ANCHOR_LAB_YAML_DIR isn't set")
+	}
+	defer AllowLoopbackForTests()()
+	srv := httptest.NewServer(http.FileServer(http.Dir(dir)))
+	defer srv.Close()
+	lim := DefaultLimits
+	lim.MinInterval = 0
+	files, _ := filepath.Glob(filepath.Join(dir, "*.y*ml"))
+	opened, refused, operations := 0, 0, 0
+	why := map[string]int{}
+	for _, file := range files {
+		name := filepath.Base(file)
+		twin := strings.TrimSuffix(name, filepath.Ext(name)) + ".json"
+		if _, err := os.Stat(filepath.Join(dir, twin)); err != nil {
+			continue
+		}
+		want, wantTools, wantErr := OpenAPI(context.Background(), srv.URL+"/"+url.PathEscape(twin), "", "anchor-lab/test", lim)
+		got, gotTools, err := OpenAPI(context.Background(), srv.URL+"/"+url.PathEscape(name), "", "anchor-lab/test", lim)
+		if wantErr != nil || err != nil {
+			if wantErr == nil || err == nil || wantErr.Error() != err.Error() {
+				t.Errorf("%s: %v in YAML and %v in JSON", name, err, wantErr)
+			}
+			refused++
+			var es *ErrStatus
+			if errors.As(err, &es) {
+				detail, _, _ := strings.Cut(es.Detail, ": ")
+				why[es.Status+", "+clip(detail, 70)]++
+			}
+			continue
+		}
+		opened++
+		operations += len(gotTools)
+		if got.Protocol != want.Protocol || got.Server != want.Server || got.URL != want.URL || len(gotTools) != len(wantTools) {
+			t.Errorf("%s: %s %q %s with %d operations in YAML, %s %q %s with %d in JSON", name, got.Protocol, got.Server, got.URL, len(gotTools), want.Protocol, want.Server, want.URL, len(wantTools))
+			continue
+		}
+		for i, w := range wantTools {
+			g := gotTools[i]
+			var gs, ws any
+			json.Unmarshal(g.InputSchema, &gs)
+			json.Unmarshal(w.InputSchema, &ws)
+			gOK, _ := Callable(g)
+			wOK, _ := Callable(w)
+			if g.Name != w.Name || g.Description != w.Description || gOK != wOK || !reflect.DeepEqual(gs, ws) {
+				t.Errorf("%s: operation %d is %s %q %s in YAML and %s %q %s in JSON", name, i, g.Name, g.Description, g.InputSchema, w.Name, w.Description, w.InputSchema)
+				break
+			}
+		}
+	}
+	t.Logf("%d descriptions opened the same from YAML as from JSON, with %d operations, and %d were refused the same way", opened, operations, refused)
+	for reason, n := range why {
+		t.Logf("%d refused: %s", n, reason)
 	}
 }

@@ -26,7 +26,7 @@ import (
 //	anchor-lab api -openapi https://api.example.com/openapi.json -model qwen3.8-27b  and a model calls the GET ones
 func apiCmd(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("api", flag.ExitOnError)
-	spec := fs.String("openapi", "", "the address of the API's OpenAPI document, in JSON")
+	spec := fs.String("openapi", "", "the address of the API's OpenAPI document, in JSON or YAML")
 	base := fs.String("url", "", "where the API's requests go; empty takes the document's own server address")
 	slug := fs.String("slug", "api", "a name for the run's folder")
 	model := fs.String("model", "", "the model that calls the operations, as its server knows it; empty only lists them")
@@ -40,7 +40,7 @@ func apiCmd(args []string, out io.Writer) error {
 	fs.Parse(args)
 	t := targets.Target{Slug: *slug, Name: *slug, URL: *base, OpenAPI: *spec}
 	if *spec == "" {
-		return errors.New("-openapi: the address of the API's OpenAPI document, in JSON")
+		return errors.New("-openapi: the address of the API's OpenAPI document, in JSON or YAML")
 	}
 	if err := targets.Check(t); err != nil {
 		return err

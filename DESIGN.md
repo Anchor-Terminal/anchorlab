@@ -148,6 +148,17 @@ small, they use the standard library only, and they treat everything above as da
   second we measured hurt most. Each variant keeps the publisher's sampling unless its name says
   otherwise, so a difference in the score is the thing named. The Lab score stays the plain
   model's, at the publisher's settings; a variant's scores are the comparison beside it.
+- **A harness adapter is a variant, and the question is whether it travels.** Vlad, 22 November
+  2026, asked for harness-hub's OpenCode adapter for Qwen3.8-27B to be added to the list. It's a
+  LoRA of rank 32 trained with reinforcement learning inside the OpenCode coding agent, and its
+  card's results are all under that harness. Ours is a different one, so what the lab can add is
+  the thing the card can't say: whether an adapter trained for one harness helps, does nothing or
+  hurts in another. For that the comparison has to change one thing, so the adapter comes with a
+  partner. `qwen3.8-27b+nothink-t0.8` is the plain model with thinking off at temperature 0.8 and
+  top_p 1.0, which is how the card ran both sides, and `qwen3.8-27b+opencode` is the same with the
+  adapter loaded (`lora` in its preset). The plain `qwen3.8-27b` stays the Lab score, at Qwen's
+  settings. The card says the GGUF build of the adapter hasn't been evaluated again, so a poor
+  score here could be the conversion and not the adapter, and the notes say so. Neither has run.
 - **Removing and swapping a model needs no sudo.** "A command to remove a model and switch to a new
   one" (Vlad). `models/fetch.sh remove`, `swap` and `prune` work on the models folder as the user who
   downloads, and switching is `anchor-lab model use`, a file in the inbox, as before. `remove`

@@ -67,11 +67,18 @@ func TestGradeGiven(t *testing.T) {
 			t.Errorf("a not-found as the only lookup for a count: %s", g.Status)
 		}
 	}
-	// and the normal set's traps keep the rule their version was scored with
+	// the normal set's NONE traps count being told too, since its second version, and no other
+	// task of it does: a change to either is a change to how an answer is checked, and a new version
+	if Version != "anchor-lab-eval/2" {
+		t.Errorf("the normal set is %s: say here which tasks count a not-found in it", Version)
+	}
 	for _, task := range Tasks {
-		if task.NotFoundCounts {
-			t.Errorf("%s: the normal set's checking changed without a new version", task.ID)
+		if task.NotFoundCounts != (task.Kind == None) {
+			t.Errorf("%s: counts a not-found %v, in %s", task.ID, task.NotFoundCounts, Version)
 		}
+	}
+	if len(noneTraps()) != 4 {
+		t.Errorf("%d NONE traps in the normal set, and Rescore grades four again", len(noneTraps()))
 	}
 	// with no snapshot the answers are held against the site as it is now
 	for _, g := range GradeGiven(ctx, set.Tasks, src, nil, given[:1], nil) {

@@ -344,10 +344,30 @@ small, they use the standard library only, and they treat everything above as da
   NONE questions in a pass where their only lookup was the 404. So a hard task can say
   `NotFoundCounts`, and its three NONE traps do: a 404 or a 410 from the site, or a tool that
   answered with an error, is the lookup (`TaskResult.Asked`). The normal set's four NONE traps
-  have the same flaw and keep it for now, on purpose: how an answer is checked is part of a set's
-  version, the eleven Lab scores were made under `anchor-lab-eval/1`, and changing the rule under
-  them would make new scores and old ones differ for a reason nobody can see. Fixing it there is
-  `anchor-lab-eval/2` and a rerun of every model (Open).
+  had the same flaw. They couldn't be changed in place: how an answer is checked is part of a
+  set's version, the eleven Lab scores were made under `anchor-lab-eval/1`, and changing the rule
+  under them would make new scores and old ones differ for a reason nobody can see. The next
+  decision is what was done about it.
+- **The normal set's traps are fixed in a second version, and the saved runs are graded again,
+  not run again.** A new version usually means every model runs again, which was about 67 hours
+  of the box for eleven models. Vlad, 22 November 2026, chose to grade the saved runs again
+  instead. It's sound here because `anchor-lab-eval/2` asks the same 59 questions and changes
+  one check, and a run's journal already holds what that check needs: each question's
+  `answer.txt`, and how every call and fetch ended. So `eval.Rescore` reads a score's own run
+  and looks at the four NONE traps only. A pass changes when it was marked wrong, no lookup
+  answered, at least one was answered with "it isn't there" (a 404 or a 410, a tool's error) and
+  the answer was NONE. It can only go from wrong to right. The run's time, tokens and every other
+  task stand as they were, and the new score says where it came from (`from` on the score, the
+  version it was first graded under). No model is asked and the site isn't read. Where the
+  journal and the saved score count a trap's passes differently, or a pass isn't in the journal,
+  that task is left as it was, which can only keep a score lower than it should be. A score
+  whose run isn't in the journal at all isn't carried: that model has no score of version 2
+  until it runs again. The harness does this itself when it starts (`carryScores`), because a
+  box that serves version 2 with no scores in it would empty the site's page until somebody
+  remembered a command, and it writes one event a model with the score before and after
+  (`eval.rescored`). `anchor-lab eval -rescore` prints the same thing and keeps nothing, so the
+  change can be read before the harness that makes it is installed. Both versions' scores stay
+  in `eval.ndjson`: version 1's are the record of what was published under it.
 - **What the lab is doing shows where Vlad looks.** Vlad, 18 November 2026, of the admin page's Lab
   tab: "i should see what it's doing on the lab page, that's where i wanted it". The stats carry
   the evaluation in progress (which question of which pass, how many right, wrong and skipped so
@@ -651,7 +671,8 @@ real run, because the page should be shaped by what the results look like.
     score of 100. Fable was right in every pass on all 59, Haiku on 55 and Sonnet on 51. Nobody
     gave a wrong answer in nine passes: every miss in a single pass was a right answer with no
     lookup counted behind it, either a file reused from an earlier question (which a model on
-    the box can't do) or a 404 as the only lookup on a NONE trap (which is the flaw in Open).
+    the box can't do) or a 404 as the only lookup on a NONE trap (the flaw the set's second
+    version fixes).
     The best local model's Lab score is 98, so the normal set no longer tells the top apart. A
     pass over the 59 took between two and a half and ten minutes from its first call to its last.
   - The hard set, 66 questions, with the lab's limits enforced by the runner. Fable 66, 66 and
@@ -677,12 +698,10 @@ real run, because the page should be shaped by what the results look like.
 
 ## Open
 
-- **The normal set's NONE traps mark a right answer wrong.** A model whose only lookup for
-  `none-listing`, `none-tool-count`, `none-category` or `none-model` was the 404 or the tool error
-  that says the thing isn't there is graded wrong (Decisions, "Being told it isn't there is a
-  lookup"). Four level 2 tasks, so up to 8 of the 110 weighted points. The transcripts on the box
-  say how often it cost a model: an `eval.end` that's wrong with an `answer.txt` of NONE. The fix
-  is one field on four tasks, a new version of the set and a rerun, so it waits for Vlad's word.
+- **What grading the eleven saved runs again changes.** `eval.Rescore` is tested on made-up
+  journals, not on the box's. The four traps are level 2, so a model can gain up to 8 of the 110
+  weighted points. `anchor-lab eval -rescore` on the box says what each model gains, before the
+  harness that keeps the new scores is installed.
 - **HTTP APIs.** Over half the listings on the site are plain APIs, not MCP servers. They need a second kind of call in
   the gateway (same address check, same limits) driven by the listing's OpenAPI file.
 - **Tasks with a right answer.** `explore` measures whether a tool can be called. Task success

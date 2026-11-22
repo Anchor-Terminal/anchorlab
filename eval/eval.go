@@ -527,6 +527,9 @@ type Score struct {
 	// NoTools is how many tasks, over every pass, the model's server refused tools for (a chat
 	// template that takes none): those went on with programs only
 	NoTools int `json:"noTools,omitempty"`
+	// From is the version a score was first graded under, when it's a run of an older version
+	// graded again from its journal and not run again (Rescore). Empty on a score made by a run.
+	From string `json:"from,omitempty"`
 }
 
 // ModeOf is a score's mode, code for one from before modes.
@@ -684,6 +687,17 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 		s.Turns, s.Builds, s.BuildFails, s.Calls, s.Fetches, s.Native = s.Turns/n, s.Builds/n, s.BuildFails/n, s.Calls/n, s.Fetches/n, s.Native/n
 		s.ModelMs, s.PromptTokens, s.OutputTokens = s.ModelMs/int64(n), s.PromptTokens/n, s.OutputTokens/n
 	}
+	s.tally(tasks)
+	return s
+}
+
+// tally works out everything a score says about right and wrong from PerTask, each task's passes
+// right and passes scored: the tasks scored and right, by level, the steady, flaky and wrong
+// ones, the share and the Lab score. Fold ends with it, and Rescore runs it again after grading
+// some passes again.
+func (s *Score) tally(tasks []Task) {
+	s.Scored, s.Correct, s.Steady, s.Pct, s.Points = 0, 0, 0, 0, 0
+	s.ByLevel, s.OfLevel, s.Wrong, s.Flaky = [4]int{}, [4]int{}, nil, nil
 	for _, t := range tasks {
 		pt := s.PerTask[t.ID]
 		if pt[1] == 0 {
@@ -710,7 +724,6 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 		s.Pct = float64(int(1000*float64(s.Correct)/float64(s.Scored)+0.5)) / 10
 	}
 	s.Points = Points(s.ByLevel, s.OfLevel)
-	return s
 }
 
 // Points is the Lab score from the tasks right and scored at each level: harder tasks weigh more,
@@ -784,7 +797,12 @@ func Load(state string) ([]Score, error) { return LoadSet(state, Normal()) }
 
 // LoadSet reads every score of this version of a set, best first.
 func LoadSet(state string, set Set) ([]Score, error) {
-	b, err := os.ReadFile(filepath.Join(state, set.File))
+	return loadVersion(state, set.File, set.Version)
+}
+
+// loadVersion reads the scores of one version from a scores file, best first.
+func loadVersion(state, file, version string) ([]Score, error) {
+	b, err := os.ReadFile(filepath.Join(state, file))
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -794,7 +812,7 @@ func LoadSet(state string, set Set) ([]Score, error) {
 	var out []Score
 	for _, line := range bytes.Split(b, []byte("\n")) {
 		var s Score
-		if json.Unmarshal(line, &s) == nil && s.V == set.Version {
+		if json.Unmarshal(line, &s) == nil && s.V == version {
 			out = append(out, s)
 		}
 	}

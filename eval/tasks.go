@@ -11,7 +11,15 @@ import (
 
 // Version names the task set. A change to any task, or to how an answer is checked, is a new
 // version, and scores of different versions aren't compared.
-const Version = "anchor-lab-eval/1"
+//
+// 2 has the questions of 1 and one change to the checking: on the four traps whose right answer
+// is NONE, being told the thing isn't there counts as the lookup (NotFoundCounts). 1 marked a
+// model wrong that asked, was told no and answered NONE. A score of 1 isn't thrown away or run
+// again: its run is in the journal, and Rescore grades those four tasks again from it.
+const Version = "anchor-lab-eval/2"
+
+// Version1 is the set's first version, whose saved scores Rescore carries into this one.
+const Version1 = "anchor-lab-eval/1"
 
 // Task is one question with one right answer, worked out from the site when the task runs.
 type Task struct {
@@ -30,8 +38,8 @@ type Task struct {
 	FromList bool
 	// NotFoundCounts is a task where being told the thing isn't there (a 404, a tool's "no such
 	// listing") counts as that lookup: for a task whose right answer is NONE it's the lookup
-	// that answers the question. The hard set's traps set it. The normal set's don't, because how
-	// an answer is checked is part of a set's version (DESIGN.md, "The hard set").
+	// that answers the question. The NONE traps of both sets set it, the normal set's since
+	// anchor-lab-eval/2 (how an answer is checked is part of a set's version).
 	NotFoundCounts bool
 	// Verify is for a task with many right answers (a set of listings that meets some rules):
 	// it says whether this answer is one of them, against the site as it is now. Want then gives
@@ -706,19 +714,19 @@ var Tasks = []Task{
 	{ID: "known-data-licence", Level: 1, Kind: Text, Ask: "Under which licence does Anchor Terminal publish its data? Give the SPDX identifier.", Want: fixed("CC-BY-4.0", "CC BY 4.0")},
 
 	// ---- traps: the right answer is that there isn't one, or a tool the task must leave alone
-	{ID: "none-listing", Level: 2, Kind: None, Ask: "What grade does Anchor Terminal give the listing zorblax-search-api? If there's no such listing, answer NONE.",
+	{ID: "none-listing", Level: 2, Kind: None, NotFoundCounts: true, Ask: "What grade does Anchor Terminal give the listing zorblax-search-api? If there's no such listing, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			_, err := s.Listing(ctx, "zorblax-search-api")
 			return err
 		})},
-	{ID: "none-model", Level: 2, Kind: None, Ask: "What does gpt-7-ultra cost per million input tokens on openai-api, by Anchor Terminal's price list? If the list has no such model, answer NONE.",
+	{ID: "none-model", Level: 2, Kind: None, NotFoundCounts: true, Ask: "What does gpt-7-ultra cost per million input tokens on openai-api, by Anchor Terminal's price list? If the list has no such model, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			_, err := s.Model(ctx, "openai-api", "gpt-7-ultra")
 			return err
 		})},
-	{ID: "none-tool-count", Level: 2, Kind: None, Ask: "How many tools does the Anchor Terminal listing anchor-quantum-mcp offer? If there's no such listing, answer NONE.",
+	{ID: "none-tool-count", Level: 2, Kind: None, NotFoundCounts: true, Ask: "How many tools does the Anchor Terminal listing anchor-quantum-mcp offer? If there's no such listing, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error { _, err := s.Tool(ctx, "anchor-quantum-mcp"); return err })},
-	{ID: "none-category", Level: 2, Kind: None, Ask: "Which listing ranks first in Anchor Terminal's teleportation category? If there's no such category, answer NONE.",
+	{ID: "none-category", Level: 2, Kind: None, NotFoundCounts: true, Ask: "Which listing ranks first in Anchor Terminal's teleportation category? If there's no such category, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			_, err := nth("teleportation", 1)(ctx, s)
 			return err

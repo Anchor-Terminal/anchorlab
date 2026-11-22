@@ -6,11 +6,14 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
+	"text/tabwriter"
 	"time"
 
 	"github.com/Anchor-Terminal/anchorlab/agent"
@@ -46,6 +49,7 @@ func evalCmd(args []string) error {
 	before := fs.String("before", "", "with -grade: the snapshot taken before the answers were made, one for each file or one for all")
 	mode := fs.String("mode", eval.ModeEither, "either: the model calls tools itself or writes programs, as it chooses (the Lab score); code: programs only")
 	setName := fs.String("set", "normal", "the questions: normal (the Lab score) or hard (harder questions, scored apart and never ranked)")
+	rescore := fs.Bool("rescore", false, "grade each model's latest score of the set's last version again from its run's journal, print what changes, and exit: no model is asked. The lab keeps the new scores itself when it starts; -here keeps them now")
 	fs.Parse(args)
 	if *mode != eval.ModeEither && *mode != eval.ModeCode {
 		return fmt.Errorf("-mode: either or code, got %q", *mode)
@@ -59,6 +63,11 @@ func evalCmd(args []string) error {
 		return errors.New("-set hard runs whole and in either mode: no -mode code, no -sample")
 	}
 	switch {
+	case *rescore:
+		if hard {
+			return errors.New("-rescore is for the normal set: the hard set has had one version")
+		}
+		return evalRescore(os.Stdout, *state, *here)
 	case *questions:
 		return evalQuestions(set)
 	case *snapshot != "":
@@ -188,6 +197,85 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	}
 	cp.Finish()
 	return s, nil
+}
+
+// carryScores grades each model's latest score of the set's version before this one again from
+// its run's journal and keeps it as a score of this version (eval.RescoreAll), so a change to how
+// an answer is checked doesn't leave the lab with no scores until every model has run again. The
+// harness does it when it starts, as itself, and a second start finds nothing to do.
+func carryScores(j *journal.Journal, state string) {
+	done, lost, err := eval.RescoreAll(state, true)
+	for _, r := range done {
+		j.Event("", "eval.rescored", map[string]any{"model": r.Model, "mode": r.Mode, "from": eval.Version1, "set": eval.Version,
+			"was": r.Was, "points": r.Now, "passes": r.Flips(), "missing": r.Missing, "disagree": len(r.Disagree)})
+	}
+	for _, s := range lost {
+		j.Event("", "eval.unscored", map[string]any{"model": s.Model, "mode": s.ModeOf(), "from": eval.Version1})
+	}
+	if err != nil {
+		j.Event("", "eval.rescore.failed", map[string]any{"kept": len(done)})
+	}
+}
+
+// evalRescore prints what grading the old scores again changes, model by model, and with keep
+// saves the new ones. Reading needs no more than the anchorlab group has.
+func evalRescore(out io.Writer, state string, keep bool) error {
+	done, lost, err := eval.RescoreAll(state, keep)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "%s to %s, from each run's own journal. No model is asked and nothing runs.\n", eval.Version1, eval.Version)
+	fmt.Fprintln(out, "Only a pass of a NONE trap can change, from wrong to right: the model asked, was told there's no such thing, and answered NONE.")
+	if len(done) > 0 {
+		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "\nmodel\tmode\twas\tnow\tright\tpasses changed")
+		for _, r := range done {
+			var which []string
+			for _, id := range sortedKeys(r.Flipped) {
+				which = append(which, fmt.Sprintf("%s %d", id, r.Flipped[id]))
+			}
+			note := ""
+			if len(which) > 0 {
+				note = " (" + strings.Join(which, ", ") + ")"
+			}
+			if r.Missing > 0 {
+				note += fmt.Sprintf("; %d passes of the traps aren't in the journal and stay as they were", r.Missing)
+			}
+			if len(r.Disagree) > 0 {
+				note += "; the journal and the score disagree on " + strings.Join(r.Disagree, ", ") + ", left as it was"
+			}
+			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d to %d\t%d%s\n", r.Model, r.Mode, r.Was, r.Now, r.WasRight, r.NowRight, r.Flips(), note)
+		}
+		tw.Flush()
+		if keep {
+			fmt.Fprintf(out, "\nkept: %d scores of %s, beside the old ones in %s\n", len(done), eval.Version, filepath.Join(state, eval.File))
+		} else {
+			fmt.Fprintln(out, "\nnot kept: the lab keeps them itself when it next starts")
+		}
+	}
+	for _, s := range lost {
+		fmt.Fprintf(out, "%s (%s mode, %d): its run isn't in the journal, so it has no score of %s until it runs again\n", s.Model, s.ModeOf(), s.Points, eval.Version)
+	}
+	if len(done) == 0 && len(lost) == 0 {
+		now, _ := eval.Load(state)
+		carried := 0
+		for _, s := range now {
+			if s.From != "" {
+				carried++
+			}
+		}
+		fmt.Fprintf(out, "\nnothing to grade again: %d scores of %s, %d of them carried over from %s\n", len(now), eval.Version, carried, eval.Version1)
+	}
+	return nil
+}
+
+func sortedKeys(m map[string]int) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // evalQueued runs the evaluations asked for in the inbox, oldest first, between tests.

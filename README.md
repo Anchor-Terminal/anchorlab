@@ -318,6 +318,7 @@ anchor-lab eval -compare
 anchor-lab eval -flips qwen3.8-27b,qwen3.5-122b-a10b
 anchor-lab eval -set hard -model qwen3.8-27b   # the hard set: kept apart, never the Lab score
 anchor-lab eval -set hard -compare
+anchor-lab eval -rescore                  # what the last version's scores become under this one
 ```
 
 An evaluation stopped by a restart or an install isn't lost: each question is kept as it finishes,
@@ -337,7 +338,15 @@ is checked against the site as it was when the task started and as it is when th
 so data that changed while the model worked doesn't cost it the task. A task whose subject left the
 site, or that has two right answers right now (a tie), is skipped for that pass, and one where the
 site didn't answer the harness isn't counted. An answer with no lookup behind it is wrong: the
-question is about the site today, not what a model remembers.
+question is about the site today, not what a model remembers. On the four traps whose right answer
+is NONE, being told the thing isn't there (a 404, a tool's "no such listing") is that lookup.
+
+That last rule is what makes this `anchor-lab-eval/2`. Version 1 counted only a lookup that
+answered, so a model that asked, was told no and answered NONE was marked wrong. Scores of version
+1 aren't run again: the harness grades each model's latest one again from its own run's journal
+when it starts, on those four tasks only, and keeps it as a score of version 2 with `from` saying
+so. `anchor-lab eval -rescore` prints what that changes, model by model, and keeps nothing. A
+score whose run isn't in the journal has no version 2 score until the model runs again.
 
 `anchor-lab eval` run by you asks the lab to run it, like a bench (`eval-*.request` in the inbox),
 and the site's admin page can ask too. Scores go to `eval.ndjson`, each model's latest is served at

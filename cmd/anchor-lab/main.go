@@ -135,6 +135,8 @@ func run(args []string) error {
 	} else {
 		o.Key = keyOpener(*state, nil, o.UserAgent, o.Limits) // says so when a sealed key is waiting
 	}
+	// scores of the evaluation's last version, graded again from their own runs (eval.Rescore)
+	carryScores(j, *state)
 	// use sets the model the next tests ask, from the inbox when `anchor-lab model use` has written
 	// one, otherwise from -model. A name that won't do is written down and the model before stays.
 	use := func(m string) {

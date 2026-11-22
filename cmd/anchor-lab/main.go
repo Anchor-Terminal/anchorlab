@@ -48,7 +48,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | cell | sync | stats | status | model | targets | retest | boxkey | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | cell | sync | stats | status | model | targets | retest | api | boxkey | version")
 		os.Exit(2)
 	}
 	var err error
@@ -74,6 +74,8 @@ func main() {
 		err = targetsCmd(args)
 	case "retest":
 		err = retestCmd(args, os.Stdout)
+	case "api":
+		err = apiCmd(args, os.Stdout)
 	case "pause":
 		err = pauseCmd(args, os.Stdout)
 	case "boxkey":

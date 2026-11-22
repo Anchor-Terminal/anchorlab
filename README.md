@@ -301,6 +301,47 @@ your own the same way: a file that starts `//go:build privatebench`, in `package
 `Version`, `Cases` and `Right`, and build with `./build.sh <your file>`. A `_test.go.txt` file beside
 it with the same name runs with the build.
 
+## A plain HTTP API
+
+Over half of what Anchor Terminal lists is an API with no MCP server in front of it, and what an
+agent does with one is write a small integration from the API's own description. The lab tests
+those the same way it tests an MCP server. It reads the API's OpenAPI document, in JSON or YAML,
+and hands the model each operation as a tool: a name, what the operation says it does, and its
+path and query parameters as the arguments. `tool.Call` on one is a request to the API, made by the harness, so
+the cell still has no network.
+
+```
+anchor-lab api -openapi https://api.example.com/openapi.json                     # its operations, as the lab reads them
+anchor-lab api -openapi https://api.example.com/openapi.json -model qwen3.8-27b  # and a model calls the GET ones
+anchor-lab api -openapi https://docs.example.com/openapi.yaml -url https://api.example.com/v2
+```
+
+`anchor-lab api` is a look: it runs once in this process, prints each operation with whether it
+answered, on which try and how fast, and keeps nothing in the lab's state. In the list of targets,
+an entry with `openapi` is an API, and its results are a `connect` and an `explore` like any other.
+
+The rules are the gateway's own. Only GET is ever sent, so every other operation is listed and
+marked as never sent. Requests go to the API's own address and nowhere else, with the same pause
+between them, the same limit on a run's calls and the same limit on an answer. A 401 or a 403 is
+the API wanting a key, a 4xx comes back to the program with the API's own words so it can fix the
+request, and a 5xx is the API failing. A run offers a model 60 GET operations at most, in the order
+the document's paths sort, and leaves out the deprecated ones.
+
+Go's standard library has no YAML reader and the harness takes no dependency, so it has its own
+(`yaml/`), which turns a description in YAML into the same JSON and carries on from there. It reads
+the YAML the OpenAPI specification asks for: version 1.2, JSON's kinds of value, and keys that are
+strings. It refuses a complex key (a line that starts with `?`), skips a tag other than `!!str`,
+reads only the first document in a file, and takes a description of up to 32 MB. DESIGN.md has what
+it was checked against. To run the same checks yourself:
+
+```
+ANCHOR_LAB_YAML_DIR=<folder> go test ./yaml ./gateway   # descriptions of your own, each with its JSON beside it if it has one
+ANCHOR_LAB_YAML_SUITE=<folder> go test ./yaml           # YAML's own test suite, the data branch of yaml/yaml-test-suite
+```
+
+Not yet: a request with a body, a key, header and cookie parameters, a description split over
+several files, and the site's list naming which listings are APIs.
+
 ## The evaluation
 
 The bench asks whether a model can get each tool to answer. The evaluation asks whether it gets the

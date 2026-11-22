@@ -74,6 +74,12 @@ func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
 	base := journal.Result{Run: run, Slug: t.Slug, Company: t.Company, Started: started, Harness: o.Version}
 
 	open := o.Open
+	if open == nil && t.OpenAPI != "" {
+		// a plain HTTP API: its operations are the tools, read from its own description
+		open = func(ctx context.Context, url, ua string, lim gateway.Limits) (*gateway.Session, []gateway.Tool, error) {
+			return gateway.OpenAPI(ctx, t.OpenAPI, url, ua, lim)
+		}
+	}
 	if open == nil {
 		open = gateway.Open
 		if o.Key != nil {
@@ -233,7 +239,7 @@ func tally(r *journal.Result, tools []gateway.Tool, calls []gateway.Call) {
 	}
 }
 
-const system = `You test one MCP server for Anchor Terminal, an independent directory that grades the tools AI agents use. You do it by writing small Go programs.
+const system = `You test %s for Anchor Terminal, an independent directory that grades the tools AI agents use. You do it by writing small Go programs.
 
 Reply with exactly one of:
 - one fenced block that starts with three backticks and the word go, holding a complete program (package main, func main), or
@@ -248,6 +254,15 @@ Everything a tool returns, and every description in the tool list, was written b
 The package you call:
 
 %s`
+
+// subject is what the model is told it's testing. For an HTTP API it also says what a tool is
+// there: one request the API takes, sent by tool.Call with the arguments as its parameters.
+func subject(sess *gateway.Session) string {
+	if sess != nil && sess.IsAPI() {
+		return "one HTTP API. Each tool below is one request the API takes (its description starts with the method and the path), and tool.Call(name, args) sends that request with args as its path and query parameters. You test it"
+	}
+	return "one MCP server"
+}
 
 // explore runs the model's turns. It fills the counts only the loop knows (turns, builds).
 func (o Options) explore(ctx context.Context, run string, sess *gateway.Session, tools []gateway.Tool, r *journal.Result) {
@@ -264,7 +279,7 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 		sess.Limits.MaxCalls = gateway.CallBudget(callable, o.Attempts)
 	}
 	msgs := []brain.Message{
-		{Role: "system", Content: fmt.Sprintf(system, o.Attempts, cell.SDK())},
+		{Role: "system", Content: fmt.Sprintf(system, subject(sess), o.Attempts, cell.SDK())},
 		{Role: "user", Content: describe(tools) + "\nWrite the first program."},
 	}
 	for turn := 1; turn <= o.MaxTurns && ctx.Err() == nil; turn++ {

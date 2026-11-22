@@ -179,6 +179,7 @@ type Session struct {
 	reqURL    string      // URL, with a key in its query when the key goes there
 	cred      *Credential // a key we were given for this server, nil for none
 	secrets   [][]byte    // the key in the forms it might come back in, blanked from every answer
+	api       *apiSpec    // set when the server is an HTTP API read from its OpenAPI document (openapi.go)
 
 	mu    sync.Mutex
 	last  time.Time
@@ -499,6 +500,9 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 		return fail("refused", "no such tool on this server: "+clip(name, 96))
 	}
 	if ok, why := Callable(t); !ok {
+		if s.api != nil {
+			why = "it isn't a GET, and the lab sends nothing that could change something"
+		}
 		return fail("refused", "the lab doesn't call this tool: "+why)
 	}
 	if len(args) > s.Limits.MaxArgs {
@@ -541,6 +545,9 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 	}
 	if made >= s.Limits.MaxCalls {
 		return fail("budget", fmt.Sprintf("this run has used its %d calls", s.Limits.MaxCalls))
+	}
+	if s.api != nil {
+		return s.callAPI(ctx, c, name, obj)
 	}
 	start := time.Now()
 	res, meta, err := s.rpc(ctx, "tools/call", map[string]any{"name": name, "arguments": obj})

@@ -82,13 +82,40 @@ and a model served on the box itself in the OpenAI chat format. The harness refu
 that isn't the box: the prompts hold strangers' text. `MODELS.md` sets that up with llama.cpp: the
 GPU, the build, 30 models, and one `llama-server` that loads whichever the harness asks for.
 
-## Building
+## Deploying
 
-On the box itself, from a clone of this repository. It's public, so the clone needs no key, and
-the box has Go for the cells anyway:
+On the box, as yourself (not root), from a clone of this repository, the first time and every time
+after:
 
 ```
-git clone https://github.com/Anchor-Terminal/anchorlab && cd anchorlab
+git clone https://github.com/Anchor-Terminal/anchorlab && cd anchorlab   # the first time
+./deploy.sh                                                               # every time
+```
+
+It asks for your password once, for sudo, and then runs to the end with nothing to answer: it
+pulls, builds and runs the short tests, downloads the model the lab uses if any of its files is
+missing, pauses the lab, installs the model server's presets and the lab (`models/install.sh`,
+`install.sh`, the only two things it runs as root), takes a fresh list of servers to test from
+Anchor Terminal, and lifts the pause. The lab then carries on where it was: an evaluation from its
+checkpoint, a retest with the servers it hadn't reached, a bench from its start. llama-server is
+restarted only when its presets or its unit changed, so its model stays loaded otherwise.
+
+A pull, a build or an install that fails stops it there, and up to the installs the running lab
+hasn't been touched. A model that doesn't download, or a list that doesn't come, is said and
+passed over. A lab you paused yourself stays paused. `./deploy.sh -no-pull` installs what's checked
+out, and `./deploy.sh -llama` also pulls and rebuilds llama.cpp in the checkout `LLAMA_CPP` names in
+`private/settings.env` (MODELS.md, "llama.cpp").
+
+What it can't do for you, once: llama.cpp built the first time and the models folder made
+(MODELS.md), the model the lab uses (`anchor-lab model use <name>`), and the lines install.sh
+prints for the site's server, its key and the firewall (Putting it on the box, below).
+
+## Building
+
+`deploy.sh` builds, and `./build.sh` alone builds without installing anything. The repository is
+public, so the clone needs no key, and the box has Go for the cells anyway:
+
+```
 ./build.sh                          # with the public sample bench set
 ./build.sh path/to/private.go.txt   # with a bench set of your own (see "Picking the model")
 ```
@@ -124,8 +151,8 @@ MCP server, which needs no key and has seven tools, all marked read-only.
 
 ## Putting it on the box
 
-From the clone, after `./build.sh`: `sudo bash install.sh`. It makes the `anchorlab` and `labsync`
-users, installs the binary and the units, and installs nothing else. It adds you, the user who ran
+`deploy.sh` runs this. By hand, from the clone, after `./build.sh`: `sudo bash install.sh`. It makes
+the `anchorlab` and `labsync` users, installs the binary and the units, and installs nothing else. It adds you, the user who ran
 it, to the `anchorlab` group, and to `systemd-journal` so `journalctl` shows the lab's logs: log in
 again, and everything after this needs no sudo. It can be run
 again: it replaces the binary and the units and leaves the state alone. It prints what's left:
@@ -157,7 +184,7 @@ cell's own words. The unit's system call filter is the first suspect: a refused 
 ## No sudo
 
 Installing is root's work: `sudo bash install.sh` and `sudo bash models/install.sh`, once and again
-after an update. Running the lab isn't. Everything else here works as an ordinary user in the
+after an update, which `./deploy.sh` runs for you and asks sudo for nothing else. Running the lab isn't. Everything else here works as an ordinary user in the
 `anchorlab` group, which the installer puts you in: reading the state (`status`, the events, the
 research), switching the model, making the list and asking for a bench. Those go through the
 lab's inbox (`/var/lib/anchor-lab/inbox`), the one folder the group may write, and the harness acts
@@ -270,7 +297,9 @@ anchor-lab retest -all -model gemma-4-31b          # a full test: every server, 
 Like a bench, it's a request in the inbox (`retest-*.request`), which the harness takes between
 two tests. A second model on the servers the first one failed is how a server's fault is told from
 a model's: if both fail, it's the server. The model in use doesn't change, so the full test with
-another model gives results filed under that model without switching the lab to it.
+another model gives results filed under that model without switching the lab to it. A retest cut short by a
+pause or a restart puts the servers it hadn't finished back in the inbox, and goes on with them
+after.
 
 ## Picking the model
 

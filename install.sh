@@ -119,7 +119,7 @@ echo "    the admin page's Lab tab shows the same fingerprint beside \"Keys we h
 echo
 echo "Still to do by hand, once (README.md has each line):"
 echo "  1. a model: anchor-lab model use <name> (MODELS.md has the names)"
-echo "  2. a list of targets: anchor-lab targets -inbox /var/lib/anchor-lab (from Anchor Terminal's public API)"
+echo "  2. a list of targets: anchor-lab targets -inbox /var/lib/anchor-lab (from Anchor Terminal's public API; deploy.sh does it each time)"
 if [ -n "$newsecret" ]; then
     echo "  3. a new command secret: the site's server needs the same one, as"
     echo "     ANCHOR_LAB_CONTROL_SECRET=<it> in its env file. Read it with: sudo cat /etc/anchor-lab/control.secret"

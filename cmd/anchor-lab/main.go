@@ -225,14 +225,18 @@ func run(args []string) error {
 					continue
 				}
 				if ctx.Err() != nil {
-					if root.Err() == nil { // a pause: the servers not tested yet wait for after it
-						journal.QueueRetest(*state, rq.Model, slugs[i:])
-					}
+					// a pause or a restart: the servers not tested yet wait in the inbox for after it
+					journal.QueueRetest(*state, rq.Model, slugs[i:])
 					break
 				}
 				for _, r := range agent.Run(ctx, ro, t) {
 					fmt.Printf("%s %-8s %s (retest, %s): %s, %s, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, rq.Model, r.Status, r.Outcome, r.Calls, r.Errors)
 					last[key(t.Slug, rq.Model)] = r.Ended
+				}
+				if ctx.Err() != nil {
+					// stopped part way through this one, which is tested again with the rest
+					journal.QueueRetest(*state, rq.Model, slugs[i:])
+					break
 				}
 				done++
 				sleep(ctx, *pause)

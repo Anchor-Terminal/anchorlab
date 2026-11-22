@@ -10,6 +10,7 @@
 //	anchor-lab status    the lab from a terminal: on the box, or -from the box's stats
 //	anchor-lab model     which model the lab uses; `model use <name>` switches it
 //	anchor-lab pause     stop the lab for a while (-for 8h), or -off to go on now
+//	anchor-lab why       how a model lost the questions it lost in its latest evaluation
 //	anchor-lab targets   write the list of servers to test, from Anchor Terminal's public API
 //	anchor-lab version
 package main
@@ -78,6 +79,8 @@ func main() {
 		err = pauseCmd(args, os.Stdout)
 	case "boxkey":
 		err = boxKeyCmd(args, os.Stdout)
+	case "why":
+		err = whyCmd(args, os.Stdout)
 	case "version":
 		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version, "hard", eval.HardVersion)
 	default:
@@ -102,7 +105,7 @@ func run(args []string) error {
 	unsafeCells := fs.Bool("unsafe-cells", false, "run each program as a plain child of this process, with no sandbox at all: only on a machine with nothing to lose, never on the lab box")
 	modelURL := fs.String("model-url", "http://127.0.0.1:8080/v1", "the model's OpenAI-compatible address, on this machine")
 	model := fs.String("model", "", "the model's name, sent with each request and written in each result; empty runs connect only")
-	maxTokens := fs.Int("max-tokens", 4096, "the most a reply may be")
+	maxTokens := fs.Int("max-tokens", 16384, "the most a reply may be, thinking included")
 	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	once := fs.Bool("once", false, "one pass over the list, then exit")
@@ -120,7 +123,7 @@ func run(args []string) error {
 		return err
 	}
 	o := agent.Options{
-		Journal: j, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 6, JobTimeout: 90 * time.Second, Attempts: 3,
+		Journal: j, Limits: gateway.DefaultLimits, Version: version, MaxTurns: 12, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: fmt.Sprintf("anchor-lab/%s (+https://www.anchorterminal.com/benchmark/; %s)", version, *contact),
 		Dial:      dialer(*sock, *unsafeCells),
 		Hold:      func(ctx context.Context) { hold(ctx, j, *state) },
@@ -299,7 +302,7 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 	if err := brain.Local(url); err != nil {
 		return nil, fmt.Errorf("-model-url: %w (the prompts hold strangers' text and stay on this machine)", err)
 	}
-	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait}
+	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait, MaxContext: maxContext()}
 	if temperature = strings.TrimSpace(temperature); temperature != "" {
 		t, err := strconv.ParseFloat(temperature, 64)
 		if err != nil || t < 0 || t > 2 {
@@ -308,6 +311,34 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 		c.Temperature = &t
 	}
 	return c, nil
+}
+
+// maxContext is the most of a model's context the lab uses, in tokens: ANCHOR_LAB_CONTEXT when
+// set, and otherwise 131,072. The model's server decides what each model gets when it loads it,
+// and the harness asks (brain.Client.Window), so this is a ceiling and not a setting to keep in
+// step with the presets: it keeps one long task from taking minutes a reply on a model that was
+// given a million tokens.
+func maxContext() int {
+	if n, err := strconv.Atoi(strings.TrimSpace(os.Getenv("ANCHOR_LAB_CONTEXT"))); err == nil && n >= 4096 {
+		return n
+	}
+	return 131072
+}
+
+// readyModel has the model's server load the model before a run starts, and writes down the
+// context the run will work within. A model the server can't load ends the run here, with one
+// event that says so, where it used to fail every question in turn.
+func readyModel(ctx context.Context, j *journal.Journal, b *brain.Client, model string) error {
+	if _, err := b.Loaded(ctx); err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		j.Event("", "model.unloaded", map[string]any{"model": model})
+		return fmt.Errorf("the model's server couldn't load %s, so nothing was run (journalctl -u llama-server): %w", model, err)
+	}
+	tokens, said := b.Window(ctx)
+	j.Event("", "model.context", map[string]any{"model": model, "tokens": tokens, "server": said})
+	return nil
 }
 
 // dialer is how the harness gets a fresh cell: the socket systemd listens on, or with unsafe a
@@ -333,7 +364,7 @@ func benchCmd(args []string) error {
 	unsafeCells := fs.Bool("unsafe-cells", false, "run programs as plain children, with no sandbox: never on the lab box")
 	modelURL := fs.String("model-url", "http://127.0.0.1:8080/v1", "the model's OpenAI-compatible address, on this machine")
 	model := fs.String("model", "", "the model to score, as its server knows it")
-	maxTokens := fs.Int("max-tokens", 4096, "the most a reply may be")
+	maxTokens := fs.Int("max-tokens", 16384, "the most a reply may be, thinking included")
 	temperature := fs.String("temperature", "", "the temperature sent with each request; empty leaves it to the model's server, whose presets use the publisher's (MODELS.md)")
 	modelWait := fs.Duration("model-timeout", 15*time.Minute, "how long one reply may take")
 	compare := fs.Bool("compare", false, "print every score so far, best first, and exit")
@@ -450,9 +481,12 @@ func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelUR
 	if err != nil {
 		return bench.Score{}, err
 	}
+	if err := readyModel(ctx, j, b, model); err != nil {
+		return bench.Score{}, err
+	}
 	lim := gateway.DefaultLimits
 	lim.MinInterval = 0 // the servers are in this process
-	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 8, JobTimeout: 90 * time.Second, Attempts: 3,
+	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 16, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells), Hold: func(ctx context.Context) { hold(ctx, j, state) }}
 	s := bench.RunN(ctx, o, runs)
 	if ctx.Err() != nil {

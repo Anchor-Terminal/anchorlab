@@ -23,8 +23,15 @@ const (
 )
 
 // EitherTurns is how many replies a task gets in either mode. A native call usually takes a reply
-// of its own, where a program makes many, so either mode gets more than code mode's eight.
-const EitherTurns = 16
+// of its own, so it's twice what code mode gets. Both were half this until 21 November 2026
+// (DESIGN.md, "The limits are there to protect a server, not to trip a model").
+const EitherTurns = 32
+
+// CodeTurns is how many replies a task gets in code mode.
+const CodeTurns = 16
+
+// TaskCalls is how many calls to the MCP server, and how many fetches, one task may make.
+const TaskCalls = 200
 
 // ToolBrain is a model that takes tools as native tool calls (brain.Client).
 type ToolBrain interface {
@@ -38,7 +45,7 @@ const (
 	nativeProgram = "run_program"
 	// a native call's answer reaches the model cut at this many characters: a program can read
 	// all of a 4 MB file and print what it needs, and a native call is read whole by the model
-	nativeClip = 12000
+	nativeClip = 24000
 	// most calls one reply may ask for
 	maxCallsPerTurn = 8
 )
@@ -47,9 +54,9 @@ var nativeName = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 const systemEither = `You answer one question about Anchor Terminal (www.anchorterminal.com), an independent directory that grades the tools AI agents use. Find the answer with the tools you're given and never from memory: the site's data changes every day.
 
-You can call the tools directly. Each call's answer comes back to you, the first 12,000 characters of it.
+You can call the tools directly. Each call's answer comes back to you, the first 24,000 characters of it.
 
-Or you can call run_program with a complete Go program (package main, func main). The program may import the Go standard library and "job/tool", nothing else. It runs with no network and no files. Its only way out is tool.Call(name, args), which reaches the same tools, lab_fetch by its name in a program, lab.fetch. What the program prints comes back to you, the first 6,000 characters of it.
+Or you can call run_program with a complete Go program (package main, func main). The program may import the Go standard library and "job/tool", nothing else. It runs with no network and no files. Its only way out is tool.Call(name, args), which reaches the same tools, lab_fetch by its name in a program, lab.fetch. What the program prints comes back to you, the first 12,000 characters of it.
 
 The tools:
 - The MCP server's tools.
@@ -105,7 +112,7 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 	}
 	offered := nativeTools(tools)
 	msgs := []brain.Message{
-		{Role: "system", Content: fmt.Sprintf(systemEither, cell.SDK())},
+		{Role: "system", Content: fmt.Sprintf(systemEither, cell.SDK()) + o.limitsNote()},
 		{Role: "user", Content: "The question: " + t.Ask},
 	}
 	turns := o.MaxTurns
@@ -137,6 +144,10 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 		r.ModelMs += time.Since(start).Milliseconds()
 		r.PromptTokens += usage.PromptTokens
 		r.OutputTokens += usage.OutputTokens
+		if usage.Trimmed > 0 {
+			// the conversation was sent with its oldest output cut to fit the model's context
+			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
+		}
 		if err != nil {
 			j.Event(run, "model.failed", map[string]any{"turn": turn})
 			return "", false
@@ -276,7 +287,7 @@ func path(r TaskResult) string {
 }
 
 func addUsage(a, b brain.Usage) brain.Usage {
-	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens}
+	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens, Trimmed: max(a.Trimmed, b.Trimmed)}
 }
 
 // programName is a tool's name as a program calls it: lab_fetch is lab.fetch there.

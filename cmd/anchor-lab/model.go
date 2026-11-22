@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -21,7 +22,8 @@ import (
 // choice goes in <state>/inbox/model, which the anchorlab group may write, and the harness reads it
 // before its next test, with no restart.
 //
-//	anchor-lab model                  the model the lab uses, and every model the server offers
+//	anchor-lab model                  the model the lab uses, and every model the server offers,
+//	                                  with the context the server gave the one that's loaded
 //	anchor-lab model use <name>       use another: checks the server has it and asks it to load it
 //	anchor-lab model use none         connect only, no model
 func modelCmd(args []string, out io.Writer) error {
@@ -64,7 +66,7 @@ func modelCmd(args []string, out io.Writer) error {
 			if m.ID == current {
 				mark = "*"
 			}
-			fmt.Fprintf(tw, "  %s %s\t%s\n", mark, m.ID, m.Status)
+			fmt.Fprintf(tw, "  %s %s\t%s%s\n", mark, m.ID, m.Status, loadedContext(base, m))
 		}
 		tw.Flush()
 		if current != "" && !has(models, current) {
@@ -176,6 +178,20 @@ func serverModels(server string) ([]serverModel, error) {
 		out = append(out, serverModel{ID: m.ID, Status: st})
 	}
 	return out, nil
+}
+
+// loadedContext is the context the server gave a model that's loaded, for the list: asked of the
+// model itself, and only of one that's loaded, since asking loads a model that isn't.
+func loadedContext(base string, m serverModel) string {
+	if !strings.HasPrefix(m.Status, "loaded") {
+		return ""
+	}
+	c := &brain.Client{URL: base, Model: m.ID, Timeout: 5 * time.Second}
+	n, err := c.Loaded(context.Background())
+	if err != nil || n <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(", a context of %d tokens", n)
 }
 
 func loadModel(server, name string) error {

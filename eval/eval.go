@@ -23,7 +23,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -107,6 +109,9 @@ type TaskResult struct {
 	// Cut are the MCP tools whose answer was too long for the lab and reached the program cut
 	// short, with how many times. Our own tools: an answer an agent can't take whole is ours to fix.
 	Cut map[string]int `json:"cut,omitempty"`
+	// Repairs are the builds that failed only on an unused import or variable and were put right
+	// and built again without costing the model a reply
+	Repairs int `json:"repairs,omitempty"`
 }
 
 func (o *Options) tasks() []Task {
@@ -245,6 +250,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	res.WallMs = time.Since(started).Milliseconds()
 	j.Artifact(run, "answer.txt", []byte(answer+"\n"))
 	j.Event(run, "eval.end", map[string]any{"task": t.ID, "status": res.Status, "turns": res.Turns, "calls": res.Calls, "fetches": res.Fetches,
+		"maxTurns": o.MaxTurns, "builds": res.Builds, "buildFails": res.BuildFails, "repairs": res.Repairs, "lookups": res.Lookups, "forbidden": res.Forbidden,
 		"modelMs": res.ModelMs, "cellMs": res.CellMs, "wallMs": res.WallMs, "promptTokens": res.PromptTokens, "outputTokens": res.OutputTokens})
 	return res
 }
@@ -316,7 +322,7 @@ Each reply is exactly one of:
 - one fenced block that starts with three backticks and the word go, holding a complete program (package main, func main), or
 - your final answer, as a line on its own: ANSWER: <the answer>
 
-The program may import the Go standard library and "job/tool", nothing else. It runs with no network and no files. Its only way out is tool.Call(name, args), and what it prints comes back to you, the first 6,000 characters of it, so print only what you need.
+The program may import the Go standard library and "job/tool", nothing else. It runs with no network and no files. Its only way out is tool.Call(name, args), and what it prints comes back to you, the first 12,000 characters of it, so print only what you need.
 
 The tools:
 - The MCP server's tools, listed below by name.
@@ -334,7 +340,7 @@ The package you call:
 func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway.Session, tools []gateway.Tool, fetch func(json.RawMessage) gateway.Reply, r *TaskResult) (string, bool) {
 	j := o.Journal
 	msgs := []brain.Message{
-		{Role: "system", Content: fmt.Sprintf(system, cell.SDK())},
+		{Role: "system", Content: fmt.Sprintf(system, cell.SDK()) + o.limitsNote()},
 		{Role: "user", Content: describe(tools) + "\nThe question: " + t.Ask + "\n\nWrite the first program."},
 	}
 	for turn := 1; turn <= o.MaxTurns && ctx.Err() == nil; turn++ {
@@ -344,6 +350,9 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 		r.ModelMs += time.Since(start).Milliseconds()
 		r.PromptTokens += usage.PromptTokens
 		r.OutputTokens += usage.OutputTokens
+		if usage.Trimmed > 0 {
+			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
+		}
 		if err != nil {
 			j.Event(run, "model.failed", map[string]any{"turn": turn})
 			return "", false
@@ -386,18 +395,38 @@ func (o Options) runProgram(ctx context.Context, run, at, code string, sess *gat
 		j.Event(run, "cell.failed", map[string]any{"at": at})
 		return "", false
 	}
-	res, err := cell.Run(ctx, conn, code, o.JobTimeout, func(tool string, args json.RawMessage) any {
+	call := func(tool string, args json.RawMessage) any {
 		if tool == FetchTool {
 			return fetch(args)
 		}
 		return sess.CallTool(ctx, tool, args)
-	})
+	}
+	res, err := cell.Run(ctx, conn, code, o.JobTimeout, call)
 	if err != nil {
 		j.Event(run, "cell.failed", map[string]any{"at": at})
 		return "", false
 	}
 	r.Builds++
 	r.CellMs += int64(res.BuildMs + res.RunMs)
+	repaired := false
+	if !res.Built {
+		// a build that failed only because something was imported or declared and never used
+		// says nothing about whether the model can answer: take it out and build once more
+		if fixed, ok := RepairUnused(code, res.BuildErr); ok {
+			if conn, err := o.Dial(ctx); err == nil {
+				if again, err := cell.Run(ctx, conn, fixed, o.JobTimeout, call); err == nil {
+					r.Builds++
+					r.CellMs += int64(again.BuildMs + again.RunMs)
+					if again.Built {
+						res, repaired = again, true
+						r.Repairs++
+						j.Artifact(run, "code-"+at+"-repaired.go", []byte(fixed))
+						j.Event(run, "build.repaired", map[string]any{"at": at})
+					}
+				}
+			}
+		}
+	}
 	if !res.Built {
 		r.BuildFails++
 	}
@@ -405,17 +434,85 @@ func (o Options) runProgram(ctx context.Context, run, at, code string, sess *gat
 	var obs strings.Builder
 	switch {
 	case !res.Built:
-		fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 4000))
+		fmt.Fprintf(&obs, "The program didn't compile:\n%s\n", clip(res.BuildErr, 8000))
 	default:
-		fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 6000))
+		if repaired {
+			obs.WriteString("(Something imported or declared and never used was taken out so the program would compile.)\n")
+		}
+		fmt.Fprintf(&obs, "The program printed:\n%s\n", clip(res.Stdout, 12000))
 		if res.Stderr != "" {
-			fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 1500))
+			fmt.Fprintf(&obs, "and on standard error:\n%s\n", clip(res.Stderr, 3000))
 		}
 		if res.TimedOut {
 			obs.WriteString("It was stopped for running too long.\n")
 		}
 	}
 	return obs.String(), true
+}
+
+// limitsNote tells the model what a question's limits are, which it otherwise learns by running
+// into them: the replies it has, and the calls and fetches a question gets before they're refused.
+func (o Options) limitsNote() string {
+	if o.Limits.MaxCalls <= 0 || o.MaxTurns <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\nYour limits for this question: %d replies, %d calls to the MCP server's tools and %d fetches. A call or a fetch past that is refused. A program can make many calls in one reply, and what one call returns (search_tools says how many listings match a filter) can save many others.\n",
+		o.MaxTurns, o.Limits.MaxCalls, o.Limits.MaxCalls)
+}
+
+var (
+	unusedImport = regexp.MustCompile(`^\S*?:(\d+):\d+: "[^"]+" imported (?:as \S+ )?and not used$`)
+	unusedVar    = regexp.MustCompile(`^\S*?:(\d+):\d+: (?:declared and not used: ([A-Za-z_][A-Za-z0-9_]*)|([A-Za-z_][A-Za-z0-9_]*) declared (?:and|but) not used)$`)
+	importLine   = regexp.MustCompile(`^\s*(?:import\s+)?(?:[A-Za-z_.][A-Za-z0-9_]*\s+)?"[^"]+"\s*$`)
+)
+
+// RepairUnused takes out of a program what the compiler refused it for, when that was only
+// imports and variables nobody used: an unused import's line goes, and an unused variable gets a
+// line after it that uses it. It's false when the compiler said anything else, so a real mistake
+// is never papered over, and the repaired program still has to build to count.
+func RepairUnused(code, buildErr string) (string, bool) {
+	lines := strings.Split(code, "\n")
+	drop, use := map[int]bool{}, map[int][]string{}
+	found := 0
+	for _, e := range strings.Split(buildErr, "\n") {
+		e = strings.TrimSpace(e)
+		if e == "" || strings.HasPrefix(e, "#") {
+			continue // blank, or the package's name
+		}
+		if m := unusedImport.FindStringSubmatch(e); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			if n < 1 || n > len(lines) || !importLine.MatchString(lines[n-1]) {
+				return "", false
+			}
+			drop[n-1] = true
+			found++
+			continue
+		}
+		if m := unusedVar.FindStringSubmatch(e); m != nil {
+			n, _ := strconv.Atoi(m[1])
+			if n < 1 || n > len(lines) {
+				return "", false
+			}
+			use[n-1] = append(use[n-1], m[2]+m[3])
+			found++
+			continue
+		}
+		return "", false // something else is wrong with it too
+	}
+	if found == 0 {
+		return "", false
+	}
+	var out []string
+	for i, l := range lines {
+		if drop[i] {
+			continue
+		}
+		out = append(out, l)
+		for _, name := range use[i] {
+			out = append(out, "_ = "+name)
+		}
+	}
+	return strings.Join(out, "\n"), true
 }
 
 // program is the go block in a reply, or "".

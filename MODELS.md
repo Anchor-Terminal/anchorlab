@@ -148,10 +148,35 @@ The first request for a model loads it, which takes from a few seconds to a minu
 ## 5. The settings, model by model
 
 `models/presets.ini` holds them. Everything shares one slot (the lab asks one thing at a time), all
-layers on the GPU, a 65,536-token context, and a 2,048-token cap on thinking. The cap is there
-because thinking counts against the harness's 4,096-token reply: without it, a model that thinks
+layers on the GPU, and an 8,192-token cap on thinking. The cap is there
+because thinking counts against the harness's 16,384-token reply: without it, a model that thinks
 at length runs out before it writes the program. Raise both together, `-max-tokens` on the harness
-and `reasoning-budget` here.
+and `reasoning-budget` here. They were 4,096 and 2,048 until 22 November 2026.
+
+**The context.** Until 22 November 2026 every model had 65,536 tokens (`c = 65536`). Now no
+context is set, and llama.cpp gives each model the largest one the GPU has room for when it loads
+it, up to what the model was trained with (`--fit`, which is on unless turned off). `fit-ctx =
+65536` is the least it may give, so no model has less than it had, and `fit-target = 4096` leaves
+4 GB of the GPU free. A model that leaves room gets a long context and one that fills the GPU
+keeps what it had, without anyone working out which is which.
+
+The harness asks the server what context a model got, by name, when a run starts (llama.cpp's
+`GET /props?model=<name>`, which also loads the model), and uses up to 131,072 tokens of it. The
+ceiling is `ANCHOR_LAB_CONTEXT` in `/etc/anchor-lab/env`, and it's there so one long task on a
+model that was given a million tokens doesn't take minutes a reply. A conversation that would
+outgrow what the harness uses is sent with its oldest tool output cut short. The context a run
+had is in its journal (`model.context`), and `anchor-lab model` shows it for the model that's
+loaded:
+
+```
+anchor-lab model          # ... * qwen3.8-27b   loaded, a context of 262144 tokens
+```
+
+To pin one model, give its section a `c` line: `c = 65536` if it won't load with what llama.cpp
+chose (the journal says `model.unloaded`, and `journalctl -u llama-server` says why), or `c =
+131072` to stop a small model taking most of the GPU for a context the harness won't use. Not `c =
+0`, which asks for the whole trained context whether it fits or not. This hasn't run on the box
+yet: the first `anchor-lab model` after an install is the check that it does what it says.
 
 Sampling is each publisher's own recommendation, from their model card. The harness sends no
 temperature of its own unless `ANCHOR_LAB_TEMPERATURE` is set, so these apply.

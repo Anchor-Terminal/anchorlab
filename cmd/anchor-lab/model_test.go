@@ -40,6 +40,12 @@ func router(t *testing.T, loaded *string) *httptest.Server {
 			}
 			*loaded = b.Model
 			w.Write([]byte(`{"success":true}`))
+		case "/props":
+			// only the loaded model is asked: asking loads a model that isn't
+			if m := r.URL.Query().Get("model"); m != *loaded {
+				t.Errorf("the server was asked for the context of %s, which isn't loaded", m)
+			}
+			w.Write([]byte(`{"default_generation_settings":{"n_ctx":131072}}`))
 		default:
 			http.NotFound(w, r)
 		}
@@ -63,6 +69,9 @@ func TestModelSwitch(t *testing.T) {
 	}
 	if s := out.String(); !strings.Contains(s, "the lab uses: gpt-oss-120b") || !strings.Contains(s, "* gpt-oss-120b") || !strings.Contains(s, "loaded") || !strings.Contains(s, "gemma-4-26b-a4b") {
 		t.Errorf("model:\n%s", s)
+	}
+	if s := out.String(); !strings.Contains(s, "loaded, a context of 131072 tokens") || strings.Count(s, "a context of") != 1 {
+		t.Errorf("the loaded model's context, and no other's:\n%s", s)
 	}
 
 	out.Reset()

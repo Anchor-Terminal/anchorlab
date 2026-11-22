@@ -133,8 +133,9 @@ again: it replaces the binary and the units and leaves the state alone. It print
 1. A model: `anchor-lab model use <name>` (the names in `MODELS.md`). The harness speaks to
    `http://127.0.0.1:8080/v1` unless `ANCHOR_LAB_MODEL_URL` in `/etc/anchor-lab/env` says another
    address on the same machine. It sends no temperature, so the server's setting for each model
-   applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. With no model, only `connect` runs,
-   which is a fine first day.
+   applies, unless `ANCHOR_LAB_TEMPERATURE` sets one for all. It asks the server what
+   context each model was loaded with and uses up to 131,072 tokens of it, unless
+   `ANCHOR_LAB_CONTEXT` sets another ceiling, and cuts a long conversation to fit. With no model, only `connect` runs, which is a fine first day.
 2. The first list: `anchor-lab targets -inbox /var/lib/anchor-lab`.
 3. For a server to collect results: its public key in `/var/lib/labsync/.ssh/authorized_keys`, on
    one line that starts `restrict,command="/usr/local/bin/anchor-lab sync" `, and `labsync` added
@@ -323,6 +324,11 @@ anchor-lab eval -rescore                  # what the last version's scores becom
 
 An evaluation stopped by a restart or an install isn't lost: each question is kept as it finishes,
 and the next start carries on from the one that was in flight.
+
+`anchor-lab why -model qwen3.8-27b` says how a model lost the questions it lost in its latest
+evaluation, from the evaluation's journal: out of replies, no answer, a tool it was told to leave
+alone, no lookup behind the answer, or a wrong answer, with the replies, calls, fetches and builds
+each one took. It prints numbers and words from a fixed list, so it's safe to paste anywhere.
 
 The tasks are in `eval/tasks.go`, public: level 1 is one lookup, level 2 a few lookups or a
 comparison, level 3 a filter, a join across the API's files or arithmetic over many listings. Eight

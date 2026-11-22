@@ -44,8 +44,20 @@ type Limits struct {
 	MaxText     int           // characters of a tool's answer handed back to the code
 }
 
-// DefaultLimits are the lab's (DESIGN.md, Numbers).
-var DefaultLimits = Limits{MaxCalls: 40, MaxBody: 4 << 20, CallTimeout: 60 * time.Second, MinInterval: 300 * time.Millisecond, MaxArgs: 64 << 10, MaxText: 32 << 10}
+// DefaultLimits are the lab's (DESIGN.md, Numbers). MaxCalls is the least a run gets: a run on a
+// server with many tools gets more (CallBudget).
+var DefaultLimits = Limits{MaxCalls: 60, MaxBody: 4 << 20, CallTimeout: 60 * time.Second, MinInterval: 300 * time.Millisecond, MaxArgs: 64 << 10, MaxText: 32 << 10}
+
+// MaxCallBudget is the most calls any run gets, however many tools a server lists.
+const MaxCallBudget = 400
+
+// CallBudget is the calls a run on a server gets: enough to try every tool the lab will call
+// tries times with a few to spare, never fewer than the default and never more than
+// MaxCallBudget. A limit that can't cover a server's tools measures the limit, not the tools.
+func CallBudget(callable, tries int) int {
+	n := callable*max(tries, 1) + 20
+	return min(max(n, DefaultLimits.MaxCalls), MaxCallBudget)
+}
 
 // Tool is one tool as the server lists it.
 type Tool struct {

@@ -17,6 +17,9 @@ type trapPass struct {
 	https  []int    // each fetch's HTTP status
 	answer string
 	stop   bool // a first try that was cut off by a stop, before the one that counts
+	// blind is a run whose programs never named the thing asked about: its lookups were about
+	// something else
+	blind bool
 }
 
 // madeUpRun writes a journal for an evaluation of model whose traps went as given and whose
@@ -60,6 +63,9 @@ func madeUpRun(t *testing.T, state, model string, traps map[string][]trapPass) S
 			for _, h := range tp[p].https {
 				j.Event(id, "fetch", map[string]any{"http": h, "ms": 5, "bytes": 10, "ok": h == 200})
 			}
+			if !tp[p].blind && len(tp[p].calls)+len(tp[p].https) > 0 {
+				j.Artifact(id, "code-1.go", []byte(`tool.Call("get_tool", map[string]any{"slug": "`+task.About[0]+`-thing"})`))
+			}
 			j.Artifact(id, "answer.txt", []byte(tp[p].answer+"\n"))
 			j.Event(id, "eval.end", map[string]any{"task": task.ID, "status": tp[p].status})
 			r.Status = tp[p].status
@@ -102,7 +108,7 @@ func TestRescore(t *testing.T) {
 		t.Errorf("flipped %v, %d missing, disagree %v", r.Flipped, r.Missing, r.Disagree)
 	}
 	s := r.Score
-	if s.V != Version || s.From != Version1 || s.Model != old.Model || !s.Ended.Equal(old.Ended) || !s.Started.Equal(old.Started) {
+	if s.V != Version2 || s.From != Version1 || s.Model != old.Model || !s.Ended.Equal(old.Ended) || !s.Started.Equal(old.Started) {
 		t.Errorf("the new score: %s from %s, %s", s.V, s.From, s.Model)
 	}
 	// none-listing is right in all three passes now, none-category in one of three: one more task right
@@ -162,8 +168,8 @@ func TestRescoreAll(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if now, _ := Load(state); len(now) != 0 {
-		t.Fatalf("%d scores of this version before anything was graded again", len(now))
+	if now, _ := loadVersion(state, File, Version2); len(now) != 0 {
+		t.Fatalf("%d scores of version 2 before anything was graded again", len(now))
 	}
 	// a look first: nothing is kept
 	done, lost, err := RescoreAll(state, false)
@@ -173,21 +179,21 @@ func TestRescoreAll(t *testing.T) {
 	if done[0].Now != 100 || done[0].Was >= 100 || done[0].NowRight != len(Tasks) {
 		t.Errorf("the Lab score: %d, was %d", done[0].Now, done[0].Was)
 	}
-	if now, _ := Load(state); len(now) != 0 {
+	if now, _ := loadVersion(state, File, Version2); len(now) != 0 {
 		t.Error("a look kept a score")
 	}
 	// kept, then nothing left to do
 	if done, _, err := RescoreAll(state, true); err != nil || len(done) != 1 {
 		t.Fatalf("kept: %d, %v", len(done), err)
 	}
-	now, _ := Load(state)
-	if len(now) != 1 || now[0].V != Version || now[0].From != Version1 || now[0].Points != 100 {
+	now, _ := loadVersion(state, File, Version2)
+	if len(now) != 1 || now[0].V != Version2 || now[0].From != Version1 || now[0].Points != 100 {
 		t.Fatalf("the scores of this version: %+v", now)
 	}
 	if done, lost, _ := RescoreAll(state, true); len(done) != 0 || len(lost) != 1 {
 		t.Errorf("a second time: %d done, %d lost", len(done), len(lost))
 	}
-	if now, _ := Load(state); len(now) != 1 {
+	if now, _ := loadVersion(state, File, Version2); len(now) != 1 {
 		t.Errorf("a second time kept another score: %d", len(now))
 	}
 	// the old scores are still in the file

@@ -209,10 +209,44 @@ func (c *Client) ChatTools(ctx context.Context, msgs []Message, tools []Tool) (M
 	return m, u, err
 }
 
+// Down is a request the model's server failed, as opposed to one the model did: the server
+// wasn't there, broke off, timed out, answered 5xx, 404 (no model by that name), 401, 403 or 429,
+// or answered 200 with something that isn't a chat completion. A 400 or a 422 isn't Down: the
+// server read the request and refused what the conversation asked of it (too long, a tool call it
+// couldn't parse), which is the conversation the model made. gBench draws the same line for the
+// requests of its agentic suite.
+type Down struct {
+	Status int // the HTTP status, 0 when there was none
+	Err    error
+}
+
+func (d *Down) Error() string { return d.Err.Error() }
+func (d *Down) Unwrap() error { return d.Err }
+
+// IsDown says whether err is the model's server failing and not the model.
+func IsDown(err error) bool {
+	var d *Down
+	return errors.As(err, &d)
+}
+
+// down wraps err as Down unless the request was stopped from outside, which is nobody's failing.
+func down(ctx context.Context, status int, err error) error {
+	if ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return err
+	}
+	return &Down{Status: status, Err: err}
+}
+
+// refusedByModel are the statuses of a request the server read and refused for what the
+// conversation held.
+func refusedByModel(status int) bool {
+	return status == http.StatusBadRequest || status == http.StatusUnprocessableEntity
+}
+
 // send is one request to the model's server, and the HTTP status it answered with.
 func (c *Client) send(ctx context.Context, msgs []Message, tools []Tool) (Message, Usage, int, error) {
 	if err := Local(c.URL); err != nil {
-		return Message{}, Usage{}, 0, fmt.Errorf("the model's address: %w", err)
+		return Message{}, Usage{}, 0, &Down{Err: fmt.Errorf("the model's address: %w", err)}
 	}
 	ask := map[string]any{"model": c.Model, "messages": msgs, "max_tokens": c.MaxTokens, "stream": false}
 	if len(tools) > 0 {
@@ -222,24 +256,31 @@ func (c *Client) send(ctx context.Context, msgs []Message, tools []Tool) (Messag
 		ask["temperature"] = *c.Temperature
 	}
 	body, _ := json.Marshal(ask)
+	outer := ctx
 	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "POST", strings.TrimRight(c.URL, "/")+"/chat/completions", bytes.NewReader(body))
 	if err != nil {
-		return Message{}, Usage{}, 0, err
+		return Message{}, Usage{}, 0, &Down{Err: err}
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Transport: &http.Transport{Proxy: nil}}).Do(req)
 	if err != nil {
-		return Message{}, Usage{}, 0, err
+		// a reply that took longer than Timeout is the harness's limit cutting the model off, and
+		// counts with the server's failings: the model never got to finish
+		return Message{}, Usage{}, 0, down(outer, 0, err)
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return Message{}, Usage{}, resp.StatusCode, err
+		return Message{}, Usage{}, resp.StatusCode, down(outer, resp.StatusCode, err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return Message{}, Usage{}, resp.StatusCode, fmt.Errorf("the model answered HTTP %d: %.300s", resp.StatusCode, raw)
+		err := fmt.Errorf("the model answered HTTP %d: %.300s", resp.StatusCode, raw)
+		if refusedByModel(resp.StatusCode) {
+			return Message{}, Usage{}, resp.StatusCode, err
+		}
+		return Message{}, Usage{}, resp.StatusCode, &Down{Status: resp.StatusCode, Err: err}
 	}
 	var out struct {
 		Choices []struct {
@@ -248,7 +289,7 @@ func (c *Client) send(ctx context.Context, msgs []Message, tools []Tool) (Messag
 		Usage Usage `json:"usage"`
 	}
 	if err := json.Unmarshal(raw, &out); err != nil || len(out.Choices) == 0 {
-		return Message{}, Usage{}, resp.StatusCode, errors.New("the model's answer isn't a chat completion")
+		return Message{}, Usage{}, resp.StatusCode, &Down{Status: resp.StatusCode, Err: errors.New("the model's answer isn't a chat completion")}
 	}
 	m := out.Choices[0].Message
 	m.Role = "assistant"

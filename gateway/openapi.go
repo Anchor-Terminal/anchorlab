@@ -375,10 +375,15 @@ func (s *Session) callAPI(ctx context.Context, c Call, name string, args map[str
 	body, err := io.ReadAll(io.LimitReader(resp.Body, s.Limits.MaxBody+1))
 	c.Ms, c.HTTP, c.Resp = int(time.Since(start).Milliseconds()), resp.StatusCode, len(body)
 	switch {
-	case err != nil && isTimeout(err):
+	case err != nil && (isTimeout(err) || errors.Is(err, context.DeadlineExceeded)):
 		return fail("timeout", "the answer stopped part way")
 	case int64(len(body)) > s.Limits.MaxBody:
 		return fail("too_big", fmt.Sprintf("the answer is over %d bytes", s.Limits.MaxBody))
+	case err != nil:
+		// the connection broke before the body was whole (it declared more bytes than came, or the
+		// stream ended in the middle). What came is kept out of the answer: half a document isn't
+		// the operation working, whatever its status said
+		return fail("incomplete", fmt.Sprintf("the answer broke off after %d bytes (HTTP %d)", len(body), resp.StatusCode))
 	}
 	text := strings.TrimSpace(string(body))
 	if !isText(text) {

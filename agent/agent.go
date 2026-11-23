@@ -103,7 +103,7 @@ func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
 		connect.Status = "error"
 		var es *gateway.ErrStatus
 		if errors.As(err, &es) {
-			connect.Status = map[string]string{"auth": "auth", "unreachable": "unreachable", "timeout": "unreachable", "refused": "refused"}[es.Status]
+			connect.Status = map[string]string{"auth": "auth", "unreachable": "unreachable", "timeout": "unreachable", "incomplete": "unreachable", "refused": "refused"}[es.Status]
 			if connect.Status == "" {
 				connect.Status = "error"
 			}
@@ -140,10 +140,18 @@ func Run(ctx context.Context, o Options, t targets.Target) []journal.Result {
 	sess.OnCall = func(c gateway.Call) {
 		j.Event(run, "call", map[string]any{"tool": c.Tool, "status": c.Status, "http": c.HTTP, "ms": c.Ms, "reqBytes": c.Req, "respBytes": c.Resp, "dryRun": c.DryRun})
 	}
-	o.explore(ctx, run, sess, tools, &ex)
+	failed := o.explore(ctx, run, sess, tools, &ex)
 	tally(&ex, tools, sess.Calls())
 	ex.Ended = o.now().UTC()
 	ex.WallMs = ex.Ended.Sub(ex.Started).Milliseconds()
+	if failed != "" && ex.Outcome != "success" {
+		// the model's server or a cell failed before the model was done: what the calls so far
+		// say would be our failing, written on the server's record. Nothing is written, and the
+		// harness comes back to the server sooner (gBench doesn't score its harness's errors either)
+		ex.Withheld = failed
+		j.Event(run, "explore.withheld", map[string]any{"failed": failed, "calls": ex.Calls, "toolsOk": ex.ToolsOK})
+		return append(out, ex)
+	}
 	j.Event(run, "run.end", map[string]any{"outcome": ex.Outcome, "calls": ex.Calls, "errors": ex.Errors, "toolsOk": ex.ToolsOK, "toolsTried": ex.ToolsTried, "turns": ex.Turns, "p50Ms": ex.P50Ms,
 		"modelMs": ex.ModelMs, "promptTokens": ex.PromptTokens, "outputTokens": ex.OutputTokens, "cellMs": ex.CellMs, "wallMs": ex.WallMs})
 	j.Result(ex)
@@ -264,8 +272,10 @@ func subject(sess *gateway.Session) string {
 	return "one MCP server"
 }
 
-// explore runs the model's turns. It fills the counts only the loop knows (turns, builds).
-func (o Options) explore(ctx context.Context, run string, sess *gateway.Session, tools []gateway.Tool, r *journal.Result) {
+// explore runs the model's turns. It fills the counts only the loop knows (turns, builds), and
+// says what failed under it when the box did: "model" for the model's server (brain.Down), "cell"
+// for a cell, "" when the model finished or ran out of replies or calls.
+func (o Options) explore(ctx context.Context, run string, sess *gateway.Session, tools []gateway.Tool, r *journal.Result) string {
 	j := o.Journal
 	// the run's calls grow with the server: every tool the lab will call can be tried Attempts
 	// times, unless the run was given a tighter limit than the lab's own on purpose
@@ -293,14 +303,17 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
 		}
 		if err != nil {
-			j.Event(run, "model.failed", map[string]any{"turn": turn, "why": err.Error()})
-			return
+			j.Event(run, "model.failed", map[string]any{"turn": turn, "why": err.Error(), "down": brain.IsDown(err)})
+			if brain.IsDown(err) && ctx.Err() == nil {
+				return "model"
+			}
+			return ""
 		}
 		j.Artifact(run, fmt.Sprintf("model-%d.txt", turn), []byte(text))
 		j.Event(run, "model.turn", map[string]any{"turn": turn, "ms": time.Since(start).Milliseconds(), "promptTokens": usage.PromptTokens, "outputTokens": usage.OutputTokens, "bytes": len(text)})
 		code, done := extract(text)
 		if done {
-			return
+			return ""
 		}
 		msgs = append(msgs, brain.Message{Role: "assistant", Content: text})
 		if code == "" {
@@ -311,14 +324,17 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 		conn, err := o.Dial(ctx)
 		if err != nil {
 			j.Event(run, "cell.failed", map[string]any{"turn": turn, "why": err.Error()})
-			return
+			return "cell"
 		}
 		res, err := cell.Run(ctx, conn, code, o.JobTimeout, func(tool string, args json.RawMessage) any {
 			return sess.CallTool(ctx, tool, args)
 		})
 		if err != nil {
 			j.Event(run, "cell.failed", map[string]any{"turn": turn, "why": err.Error()})
-			return
+			if ctx.Err() != nil {
+				return ""
+			}
+			return "cell"
 		}
 		r.Builds++
 		r.CellMs += int64(res.BuildMs + res.RunMs)
@@ -336,7 +352,7 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 			}
 		}
 		if len(left) == 0 || used >= sess.Limits.MaxCalls {
-			return
+			return ""
 		}
 		var obs strings.Builder
 		switch {
@@ -354,6 +370,7 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 		fmt.Fprintf(&obs, "\nTools still without an answer that wasn't an error: %s. Calls left: %d. Write the next program for those, or reply DONE.", strings.Join(left, ", "), sess.Limits.MaxCalls-used)
 		msgs = append(msgs, brain.Message{Role: "user", Content: obs.String()})
 	}
+	return ""
 }
 
 // remaining is the callable tools that haven't answered without an error and still have tries left.

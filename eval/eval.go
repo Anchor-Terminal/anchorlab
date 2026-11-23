@@ -67,6 +67,8 @@ type Options struct {
 	Resume *Checkpoint
 	// Mode is ModeCode or ModeEither; empty is code mode
 	Mode string
+	// RetryWait is how long a failed question waits before it's asked again: RetryWait when zero
+	RetryWait time.Duration
 }
 
 // Statuses of one task in one pass.
@@ -76,6 +78,12 @@ const (
 	StatusNoAnswer    = "no-answer"   // the model never gave an ANSWER line
 	StatusSkipped     = "skipped"     // the data moved under the task, or it has no single right answer now
 	StatusUnreachable = "unreachable" // the site or its MCP server didn't answer: nothing to do with the model
+	// StatusFailed is a question the model never got to finish because the box failed under it:
+	// the model's server (brain.Down) or a cell (TaskResult.Failed). Like an unreachable site it
+	// isn't scored, since it measured the box and not the model, and the score counts it apart
+	// (Score.Failed), so a run on a server that keeps failing can be told from a model that can't
+	// answer. A model that got every reply it asked for and still gave no answer is no-answer.
+	StatusFailed = "failed"
 )
 
 // TaskResult is one task in one pass. Numbers and fixed words only, like everything that leaves
@@ -112,6 +120,17 @@ type TaskResult struct {
 	// Repairs are the builds that failed only on an unused import or variable and were put right
 	// and built again without costing the model a reply
 	Repairs int `json:"repairs,omitempty"`
+	// Failed is what failed under a question the model didn't answer: "model" when its server
+	// did, "cell" when the box couldn't build or run a program. The status is then StatusFailed.
+	Failed string `json:"failed,omitempty"`
+	// About is the lookups about the thing the task names (Task.About): a call or a fetch that
+	// named it and was answered, if only with "there's no such thing", or a read of a source that
+	// lists every candidate. On a task with About, an answer counts only with one of these behind
+	// it, so an unrelated 404 can't stand in for looking.
+	About int `json:"about,omitempty"`
+	// Tried is the calls to a tool the task says to leave alone that the gateway refused, and so
+	// never sent: Forbidden counts them as well, since the model asked
+	Tried int `json:"tried,omitempty"`
 }
 
 func (o *Options) tasks() []Task {
@@ -164,6 +183,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 
 	var mu sync.Mutex
 	fetches, fetchOK, fetchAsked := 0, 0, 0
+	var looked []lookup // every fetch, for the task's About
 	var last time.Time
 	fetchTool := func(args json.RawMessage) gateway.Reply {
 		var a struct {
@@ -187,13 +207,24 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 		status, body, err := src.Get(ctx, a.Path)
 		ms := int(time.Since(start).Milliseconds())
 		j.Event(run, "fetch", map[string]any{"http": status, "ms": ms, "bytes": len(body), "ok": err == nil && status == 200})
+		answered := ""
+		switch {
+		case err != nil:
+		case status == 200:
+			answered = "ok"
+		case status == 404 || status == 410:
+			answered = "none" // the site answered: it isn't there
+		}
+		mu.Lock()
+		looked = append(looked, lookup{what: a.Path, answered: answered, fetch: true})
+		mu.Unlock()
 		switch {
 		case err != nil:
 			return gateway.Reply{Error: clip(err.Error(), 200), Ms: ms}
 		case status != 200:
-			if status == 404 || status == 410 {
+			if answered == "none" {
 				mu.Lock()
-				fetchAsked++ // the site answered: it isn't there
+				fetchAsked++
 				mu.Unlock()
 			}
 			return gateway.Reply{Error: fmt.Sprintf("HTTP %d", status), Text: clip(string(body), 2000), Ms: ms}
@@ -216,6 +247,9 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 		answer, gave = o.converse(ctx, run, t, sess, tools, fetchTool, &res)
 	}
 	res.Path = path(res)
+	if res.Failed != "" && !gave {
+		j.Event(run, "eval.failed", map[string]any{"task": t.ID, "failed": res.Failed})
+	}
 
 	calls := sess.Calls()
 	mcpOK, mcpAsked := 0, 0
@@ -224,19 +258,31 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 		forbid[n] = true
 	}
 	for _, c := range calls {
+		// a tool the task says to leave alone counts when the model asked for it, whether or not
+		// the gateway let the call through: what's graded is the model, and the gateway's refusal
+		// is the lab protecting the server
+		if forbid[c.Tool] {
+			res.Forbidden = true
+			if !gateway.Sent(c.Status) {
+				res.Tried++
+			}
+		}
 		if !gateway.Sent(c.Status) {
 			continue
 		}
 		res.Calls++
+		answered := ""
 		if c.Status == "ok" {
 			mcpOK++
+			answered = "ok"
 		}
 		if c.Status == "ok" || c.Status == "tool_error" {
 			mcpAsked++ // the tool answered, if only to say there's no such thing
+			if answered == "" {
+				answered = "none"
+			}
 		}
-		if forbid[c.Tool] {
-			res.Forbidden = true
-		}
+		looked = append(looked, lookup{what: string(c.Args), answered: answered})
 		if c.Cut && journal.ToolName.MatchString(c.Tool) {
 			if res.Cut == nil {
 				res.Cut = map[string]int{}
@@ -245,12 +291,20 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 		}
 	}
 	res.Fetches, res.Lookups, res.Asked = fetches, mcpOK+fetchOK, mcpAsked+fetchAsked
+	mu.Lock()
+	res.About = t.about(looked)
+	mu.Unlock()
 
-	res.Status = grade(ctx, t, src, before, errBefore, answer, gave, res)
+	if res.Failed != "" && !gave {
+		res.Status = StatusFailed
+	} else {
+		res.Status = grade(ctx, t, src, before, errBefore, answer, gave, res)
+	}
 	res.WallMs = time.Since(started).Milliseconds()
 	j.Artifact(run, "answer.txt", []byte(answer+"\n"))
 	j.Event(run, "eval.end", map[string]any{"task": t.ID, "status": res.Status, "turns": res.Turns, "calls": res.Calls, "fetches": res.Fetches,
 		"maxTurns": o.MaxTurns, "builds": res.Builds, "buildFails": res.BuildFails, "repairs": res.Repairs, "lookups": res.Lookups, "forbidden": res.Forbidden,
+		"asked": res.Asked, "about": res.About, "tried": res.Tried,
 		"modelMs": res.ModelMs, "cellMs": res.CellMs, "wallMs": res.WallMs, "promptTokens": res.PromptTokens, "outputTokens": res.OutputTokens})
 	return res
 }
@@ -268,7 +322,10 @@ func grade(ctx context.Context, t Task, src *Sources, before Answer, errBefore e
 	if res.Forbidden {
 		return StatusWrong
 	}
-	if !t.FromList && res.Lookups == 0 && !(t.NotFoundCounts && res.Asked > 0) {
+	switch {
+	case len(t.About) > 0 && res.About == 0:
+		return StatusWrong // nothing looked at was about the thing asked: an unrelated 404 isn't an answer
+	case len(t.About) == 0 && !t.FromList && res.Lookups == 0 && !(t.NotFoundCounts && res.Asked > 0):
 		return StatusWrong // an answer from memory: the question is about the site today
 	}
 	if t.Verify != nil {
@@ -354,7 +411,10 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
 		}
 		if err != nil {
-			j.Event(run, "model.failed", map[string]any{"turn": turn})
+			j.Event(run, "model.failed", map[string]any{"turn": turn, "down": brain.IsDown(err)})
+			if brain.IsDown(err) {
+				r.Failed = "model"
+			}
 			return "", false
 		}
 		j.Artifact(run, fmt.Sprintf("model-%d.txt", turn), []byte(text))
@@ -393,6 +453,7 @@ func (o Options) runProgram(ctx context.Context, run, at, code string, sess *gat
 	conn, err := o.Dial(ctx)
 	if err != nil {
 		j.Event(run, "cell.failed", map[string]any{"at": at})
+		r.Failed = "cell"
 		return "", false
 	}
 	call := func(tool string, args json.RawMessage) any {
@@ -404,6 +465,9 @@ func (o Options) runProgram(ctx context.Context, run, at, code string, sess *gat
 	res, err := cell.Run(ctx, conn, code, o.JobTimeout, call)
 	if err != nil {
 		j.Event(run, "cell.failed", map[string]any{"at": at})
+		if ctx.Err() == nil {
+			r.Failed = "cell"
+		}
 		return "", false
 	}
 	r.Builds++
@@ -587,23 +651,27 @@ type Score struct {
 	Pct     float64   `json:"pct"`     // Correct out of Scored, in percent
 	// Points is the Lab score, 0 to 100: the tasks right, a level 2 task counting twice and a level
 	// 3 task three times, out of the tasks scored weighted the same way. What the site shows.
-	Points       int               `json:"points"`
-	Steady       int               `json:"steady"`  // right in every pass they were scored in
-	ByLevel      [4]int            `json:"byLevel"` // Correct by level, 1 to 3
-	OfLevel      [4]int            `json:"ofLevel"` // Scored by level
-	Forbidden    int               `json:"forbidden"`
-	Turns        int               `json:"turns"` // these and the time and tokens: one pass, on average
-	Builds       int               `json:"builds"`
-	BuildFails   int               `json:"buildFails"`
-	Calls        int               `json:"calls"`
-	Fetches      int               `json:"fetches"`
-	ModelMs      int64             `json:"modelMs"`
-	PromptTokens int               `json:"promptTokens"`
-	OutputTokens int               `json:"outputTokens"`
-	WallMs       int64             `json:"wallMs"` // every pass
-	Unreachable  int               `json:"unreachable"`
-	Cut          map[string]int    `json:"cut,omitempty"` // every pass: calls to each MCP tool whose answer came back cut short
-	PerTask      map[string][2]int `json:"perTask"`       // passes right, passes scored
+	Points       int    `json:"points"`
+	Steady       int    `json:"steady"`  // right in every pass they were scored in
+	ByLevel      [4]int `json:"byLevel"` // Correct by level, 1 to 3
+	OfLevel      [4]int `json:"ofLevel"` // Scored by level
+	Forbidden    int    `json:"forbidden"`
+	Turns        int    `json:"turns"` // these and the time and tokens: one pass, on average
+	Builds       int    `json:"builds"`
+	BuildFails   int    `json:"buildFails"`
+	Calls        int    `json:"calls"`
+	Fetches      int    `json:"fetches"`
+	ModelMs      int64  `json:"modelMs"`
+	PromptTokens int    `json:"promptTokens"`
+	OutputTokens int    `json:"outputTokens"`
+	WallMs       int64  `json:"wallMs"` // every pass
+	Unreachable  int    `json:"unreachable"`
+	// Failed is the questions, over every pass, the box failed under before the model could
+	// answer (StatusFailed): not scored, and counted here so availability can be read beside the
+	// score. A run with more than a few of them isn't kept (MaxFailed).
+	Failed  int               `json:"failed,omitempty"`
+	Cut     map[string]int    `json:"cut,omitempty"` // every pass: calls to each MCP tool whose answer came back cut short
+	PerTask map[string][2]int `json:"perTask"`       // passes right, passes scored
 	// Time is part of the benchmark beside the Lab score, not inside it: a separate number, so a
 	// fast model that's wrong and a slow one that's right aren't mixed into one figure.
 	SecPerTask float64          `json:"secPerTask"`       // a question on average, start to grade, over the tasks that ran
@@ -658,14 +726,45 @@ func Run(ctx context.Context, o Options) []TaskResult {
 		}
 		o.n = i + 1
 		r := RunTask(ctx, o, t)
+		if r.Status == StatusFailed && ctx.Err() == nil {
+			// the box failed under the question: once more after a wait, since a model's server
+			// that fell over is usually back by then, and a question that fails twice stays failed
+			o.Journal.Event("", "eval.retry", map[string]any{"task": t.ID, "failed": r.Failed, "model": o.Model})
+			select {
+			case <-ctx.Done():
+			case <-time.After(o.retryWait()):
+				r = RunTask(ctx, o, t)
+			}
+		}
 		if ctx.Err() != nil {
 			break // stopped in the middle of the question: it's asked again on the next start
 		}
-		o.Resume.Record(max(o.pass, 1), r) // the pass as RunTask's events give it
+		if r.Status != StatusFailed {
+			// a failed question isn't written down, so the next start asks it again
+			if err := o.Resume.Record(max(o.pass, 1), r); err != nil {
+				o.Journal.Event("", "eval.checkpoint.failed", map[string]any{"task": t.ID, "model": o.Model})
+			}
+		}
 		out = append(out, r)
 	}
 	return out
 }
+
+// RetryWait is how long a question the box failed under waits before it's asked again.
+const RetryWait = 20 * time.Second
+
+func (o Options) retryWait() time.Duration {
+	if o.RetryWait > 0 {
+		return o.RetryWait
+	}
+	return RetryWait
+}
+
+// MaxFailed is how many questions, over every pass, the box may fail under before an evaluation
+// isn't kept: one in fifty, and at least one. gBench draws its line for failed requests at 2% too.
+// Past it the score would be over a different set of questions than other models', on a box
+// that wasn't working.
+func MaxFailed(runs, tasks int) int { return max(1, runs*tasks/50) }
 
 // DefaultRuns is how many passes an evaluation makes, as the bench does: one pass can rank two
 // models by luck.
@@ -729,7 +828,7 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			if r.NoTools {
 				s.NoTools++
 			}
-			if r.Path != "" && r.Status != StatusUnreachable {
+			if r.Path != "" && r.Status != StatusUnreachable && r.Status != StatusFailed {
 				if s.Paths == nil {
 					s.Paths = map[string]int{}
 				}
@@ -739,7 +838,7 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			s.CellMs += r.CellMs
 			s.PromptTokens += r.PromptTokens
 			s.OutputTokens += r.OutputTokens
-			if r.Status != StatusUnreachable && r.WallMs > 0 {
+			if r.Status != StatusUnreachable && r.Status != StatusFailed && r.WallMs > 0 {
 				wall += r.WallMs
 				ran++
 				taskWall[r.ID] += r.WallMs
@@ -763,6 +862,8 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 				pt[1]++
 			case StatusUnreachable:
 				s.Unreachable++
+			case StatusFailed:
+				s.Failed++
 			}
 			s.PerTask[r.ID] = pt
 		}
@@ -871,13 +972,7 @@ func Save(state string, s Score) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(state, fileOf(s.V)), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
-	return err
+	return journal.AppendLine(filepath.Join(state, fileOf(s.V)), b)
 }
 
 // fileOf is where a score of a set is kept: the hard set's in a file of their own, so the Lab

@@ -15,6 +15,7 @@ import (
 
 	"github.com/Anchor-Terminal/anchorlab/agent"
 	"github.com/Anchor-Terminal/anchorlab/gateway"
+	"github.com/Anchor-Terminal/anchorlab/journal"
 	"github.com/Anchor-Terminal/anchorlab/targets"
 )
 
@@ -121,9 +122,12 @@ type Score struct {
 	ModelMs      int64     `json:"modelMs"`
 	PromptTokens int       `json:"promptTokens"`
 	OutputTokens int       `json:"outputTokens"`
-	WallMs       int64     `json:"wallMs"`
-	Missed       []string  `json:"missed,omitempty"` // callable tools that never answered
-	Tried        []string  `json:"tried,omitempty"`  // traps it tried
+	WallMs       int64     `json:"wallMs"` // one pass: on a folded score, the average of its passes
+	// AllMs is the whole run's time, every pass. A folded score from before it was kept has its
+	// passes' total in WallMs, and Load puts that right.
+	AllMs  int64    `json:"allMs,omitempty"`
+	Missed []string `json:"missed,omitempty"` // callable tools that never answered
+	Tried  []string `json:"tried,omitempty"`  // traps it tried
 
 	// A score from RunN covers several passes over the set. Answered and FirstTry then count the
 	// cases that answered (or answered first time) in more than half of them; turns, builds, time
@@ -271,6 +275,7 @@ func Fold(passes []Score) Score {
 	// the cost of one pass, so a folded score compares with a one-pass one
 	s.Turns, s.Builds, s.BuildFails = s.Turns/n, s.Builds/n, s.BuildFails/n
 	s.ModelMs, s.PromptTokens, s.OutputTokens = s.ModelMs/int64(n), s.PromptTokens/n, s.OutputTokens/n
+	s.AllMs, s.WallMs = s.WallMs, s.WallMs/int64(n)
 	for _, c := range Cases {
 		if c.Trap {
 			if tried[c.Name] {
@@ -333,13 +338,7 @@ func Save(state string, s Score) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(filepath.Join(state, "bench.ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(append(b, '\n'))
-	return err
+	return journal.AppendLine(filepath.Join(state, "bench.ndjson"), b)
 }
 
 // Load reads every score of this version of the set, best first: most answered, then fewest
@@ -369,6 +368,11 @@ func Load(state string) ([]Score, error) {
 						s.PerCase[c.Name] = 1
 					}
 				}
+			}
+			if s.Runs > 1 && s.AllMs == 0 {
+				// folded before AllMs: WallMs is the passes' total, which read beside a one-pass
+				// score made the folded one look slower by its number of passes
+				s.AllMs, s.WallMs = s.WallMs, s.WallMs/int64(s.Runs)
 			}
 			out = append(out, s)
 		}

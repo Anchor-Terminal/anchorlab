@@ -31,7 +31,13 @@ type Answer struct {
 	Also  []string
 }
 
-var nonDigit = regexp.MustCompile(`[^0-9eE+\-.]`)
+// numberToken is one number as an answer writes it: a sign, digits with or without commas
+// between thousands, a decimal part, an exponent.
+var numberToken = regexp.MustCompile(`[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?|[-+]?\.[0-9]+`)
+
+// joiners are what turns two numbers into a sum, a fraction or a range: an answer with one of
+// them between digits is several numbers, not one.
+var joiners = regexp.MustCompile(`[0-9.]\s*[/×*x^:+–-]\s*[0-9.]|[0-9]\s+[0-9]`)
 
 // norm is an answer with what doesn't matter taken off: case, quotes, markdown, a full stop.
 func norm(s string) string {
@@ -43,14 +49,20 @@ func norm(s string) string {
 	return strings.ToLower(s)
 }
 
+// number is the one number in an answer. What may be around it is a currency ($, £, €, USD), a
+// percent sign, commas between thousands and words (a unit, "about"). An answer with two numbers
+// in it, or two numbers joined by a slash, an operator or a dash, isn't one number and isn't
+// read as one: "1/2" was once read as 12, by taking out everything that wasn't a digit.
 func number(s string) (float64, bool) {
-	s = strings.ReplaceAll(norm(s), ",", "")
-	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(s, "usd"), "usd"))
-	s = nonDigit.ReplaceAllString(s, "")
-	if s == "" {
+	s = norm(s)
+	if joiners.MatchString(s) {
 		return 0, false
 	}
-	f, err := strconv.ParseFloat(s, 64)
+	found := numberToken.FindAllString(s, -1)
+	if len(found) != 1 {
+		return 0, false
+	}
+	f, err := strconv.ParseFloat(strings.ReplaceAll(found[0], ",", ""), 64)
 	return f, err == nil
 }
 

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Anchor-Terminal/anchorlab/journal"
 )
 
 // A Checkpoint is an evaluation part done: each question is written down as it finishes, so a stop
@@ -111,6 +113,11 @@ func OpenCheckpointSet(state string, set Set, model, mode string, runs int, now 
 			return nil, "", err
 		}
 	}
+	// a stop in the middle of a write leaves the last line cut short. read leaves it out, and the
+	// next line written mustn't be joined to it, or that line is lost too on the next start
+	if err := journal.MendTail(path); err != nil {
+		return nil, "", err
+	}
 	c.f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {
 		return nil, "", err
@@ -169,16 +176,17 @@ func (c *Checkpoint) Count() (done int, by map[string]int) {
 	return done, by
 }
 
-// Record writes down a finished question, on disk before the next one starts.
-func (c *Checkpoint) Record(pass int, r TaskResult) {
+// Record writes down a finished question, on disk before the next one starts. An error says it
+// isn't on disk: the run goes on, and a stop before the next good write asks it again.
+func (c *Checkpoint) Record(pass int, r TaskResult) error {
 	if c == nil {
-		return
+		return nil
 	}
 	if c.Done[pass] == nil {
 		c.Done[pass] = map[string]TaskResult{}
 	}
 	c.Done[pass][r.ID] = r
-	c.write(resumeLine{Pass: pass, Result: &r})
+	return c.write(resumeLine{Pass: pass, Result: &r})
 }
 
 // Stop keeps the checkpoint for the next start, with how long this stretch took.
@@ -199,11 +207,13 @@ func (c *Checkpoint) Finish() {
 	os.Remove(c.path)
 }
 
-func (c *Checkpoint) write(l resumeLine) {
+func (c *Checkpoint) write(l resumeLine) error {
 	b, err := json.Marshal(l)
 	if err != nil {
-		return
+		return err
 	}
-	c.f.Write(append(b, '\n'))
-	c.f.Sync()
+	if _, err := c.f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return c.f.Sync()
 }

@@ -134,7 +134,7 @@ func Why(dir, model string) (WhyReport, error) {
 		case StatusCorrect:
 			rep.Right++
 			continue
-		case StatusSkipped, StatusUnreachable:
+		case StatusSkipped, StatusUnreachable, StatusFailed:
 			rep.Skipped++
 			continue
 		case StatusNoAnswer:

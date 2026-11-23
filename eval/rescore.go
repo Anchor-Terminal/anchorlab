@@ -37,8 +37,12 @@ type Regrade struct {
 	// were, which can only keep a score lower than it should be.
 	Missing  int
 	Disagree []string
-	// Score is the score of this version: Was's run, graded by Version's rules, From saying so
+	// Score is the score of the newer version: Was's run, graded by its rules, From saying so
 	Score Score
+	// From and To are the versions the score was graded under and is now (Version1 and Version2
+	// for Rescore); Unscored is the passes that left the score because the box failed under them
+	From, To string
+	Unscored int
 }
 
 // Flips is the passes that changed, over every trap.
@@ -75,7 +79,7 @@ type trapRun struct {
 	asked   int    // those, and the ones answered with "there's no such thing"
 }
 
-// noneTraps are the tasks whose check changed between Version1 and Version.
+// noneTraps are the tasks whose check changed between Version1 and Version2.
 func noneTraps() map[string]bool {
 	out := map[string]bool{}
 	for _, t := range Tasks {
@@ -86,7 +90,7 @@ func noneTraps() map[string]bool {
 	return out
 }
 
-// Rescore grades a saved score of Version1 again by Version's rules, from the journal in dir
+// Rescore grades a saved score of Version1 again by Version2's rules, from the journal in dir
 // (<state>/eval) of the run that made it. Only a pass of a NONE trap can change, and only from
 // wrong to right: one where no lookup answered, at least one was answered with "it isn't there"
 // (a 404 or a 410 from the site, a tool's error), and the answer was NONE. Nothing is asked of a
@@ -220,7 +224,7 @@ func Rescore(dir string, old Score) (Regrade, error) {
 		}
 	}
 	s.tally(Tasks)
-	s.V, s.From = Version, Version1
+	s.V, s.From = Version2, Version1
 	out.Now, out.NowRight, out.Score = s.Points, s.Correct, s
 	return out, nil
 }
@@ -232,7 +236,7 @@ func saidNone(dir, model, task, run string) bool {
 }
 
 // RescoreAll grades again each model's latest score of Version1, in each mode, unless the model
-// already has a score of Version from that run or a later one, and with keep saves the new
+// already has a score of Version2 (or of Version) from that run or a later one, and with keep saves the new
 // scores beside the old ones in <state>/eval.ndjson. A score whose run isn't in the journal is
 // left out, and is returned apart: that model has no score of this version until it runs again.
 // Running it twice changes nothing the second time.
@@ -241,10 +245,16 @@ func RescoreAll(state string, keep bool) ([]Regrade, []Score, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	now, err := Load(state)
+	now, err := loadVersion(state, File, Version2)
 	if err != nil {
 		return nil, nil, err
 	}
+	// a model already carried past the second version has nothing to gain from it
+	later, err := Load(state)
+	if err != nil {
+		return nil, nil, err
+	}
+	now = append(now, later...)
 	type key struct{ model, mode string }
 	have := map[key]time.Time{}
 	for _, s := range now {

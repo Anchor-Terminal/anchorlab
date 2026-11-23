@@ -107,7 +107,8 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 	j := o.Journal
 	tb, ok := o.Brain.(ToolBrain)
 	if !ok {
-		j.Event(run, "model.failed", map[string]any{"why": "no tool calls"})
+		j.Event(run, "model.failed", map[string]any{"why": "no tool calls", "down": true})
+		r.Failed = "model" // the harness's model client can't make tool calls: the box's doing
 		return "", false
 	}
 	offered := nativeTools(tools)
@@ -149,7 +150,10 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
 		}
 		if err != nil {
-			j.Event(run, "model.failed", map[string]any{"turn": turn})
+			j.Event(run, "model.failed", map[string]any{"turn": turn, "down": brain.IsDown(err)})
+			if brain.IsDown(err) {
+				r.Failed = "model"
+			}
 			return "", false
 		}
 		calls := reply.ToolCalls

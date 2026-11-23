@@ -313,3 +313,51 @@ func TestContext(t *testing.T) {
 		t.Errorf("with no limit: sent %v, %d left out", sent, u.Trimmed)
 	}
 }
+
+// A failure of the model's server is Down and a refusal of what the conversation asked isn't: a
+// 400 or a 422 is the model's, a 5xx, a 404 (no model by that name), a 429, a dropped connection
+// or an answer that isn't a chat completion is the server's.
+func TestDown(t *testing.T) {
+	status, body := 200, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(status)
+		w.Write([]byte(body))
+	}))
+	c := &Client{URL: srv.URL + "/v1", Model: "m", MaxTokens: 10, Timeout: 5 * time.Second}
+	for _, tc := range []struct {
+		status int
+		body   string
+		down   bool
+	}{
+		{200, `{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`, false},
+		{400, `{"error":"context too long"}`, false},
+		{422, `{"error":"bad tool call"}`, false},
+		{500, `{"error":"crashed"}`, true},
+		{503, `loading`, true},
+		{404, `{"error":"no such model"}`, true},
+		{429, `slow down`, true},
+		{200, `not json`, true},
+	} {
+		status, body = tc.status, tc.body
+		_, _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}})
+		if tc.status == 200 && !tc.down {
+			if err != nil {
+				t.Errorf("a good answer: %v", err)
+			}
+			continue
+		}
+		if err == nil || IsDown(err) != tc.down {
+			t.Errorf("HTTP %d %q: %v, down %v", tc.status, tc.body, err, IsDown(err))
+		}
+	}
+	srv.Close()
+	if _, _, err := c.Chat(context.Background(), []Message{{Role: "user", Content: "hi"}}); !IsDown(err) {
+		t.Errorf("no server: %v", err)
+	}
+	// a request stopped from outside is nobody's failing
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := c.Chat(ctx, []Message{{Role: "user", Content: "hi"}}); err == nil || IsDown(err) {
+		t.Errorf("stopped: %v", err)
+	}
+}

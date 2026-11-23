@@ -425,3 +425,40 @@ func TestRealDescriptions(t *testing.T) {
 		t.Logf("%d refused: %s", n, reason)
 	}
 }
+
+// An answer that breaks off before its declared length is incomplete, not a working operation:
+// the review of 23 November 2026 found a 200 that declared 100 bytes and sent three counted as
+// ok. A short answer that's whole is still ok.
+func TestOpenAPIBrokenBody(t *testing.T) {
+	defer AllowLoopbackForTests()()
+	spec := `{"openapi":"3.0.3","info":{"title":"T"},"servers":[{"url":"/v1"}],"paths":{"/whole":{"get":{"operationId":"whole"}},"/broken":{"get":{"operationId":"broken"}}}}`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/openapi.json":
+			w.Write([]byte(spec))
+		case "/v1/whole":
+			w.Write([]byte(`{}`))
+		case "/v1/broken":
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(200)
+			w.Write([]byte(`{"a`))
+			// the handler returns with 97 bytes still owed: the server closes the connection
+		}
+	}))
+	defer srv.Close()
+	lim := DefaultLimits
+	lim.MinInterval = 0
+	s, _, err := OpenAPI(context.Background(), srv.URL+"/openapi.json", "", "anchor-lab/test", lim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := s.CallTool(context.Background(), "whole", json.RawMessage(`{}`)); !r.OK {
+		t.Errorf("a whole short answer: %+v", r)
+	}
+	r := s.CallTool(context.Background(), "broken", json.RawMessage(`{}`))
+	calls := s.Calls()
+	last := calls[len(calls)-1]
+	if r.OK || last.Status != "incomplete" || last.HTTP != 200 || last.Resp != 3 || !Sent(last.Status) {
+		t.Errorf("a broken answer: %+v, call %+v", r, last)
+	}
+}

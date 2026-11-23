@@ -33,9 +33,13 @@ func oldScore(t *testing.T, state, model string) eval.Score {
 			if task.ID == "none-listing" {
 				status = eval.StatusWrong
 				j.Event(run, "call", map[string]any{"tool": "get_tool", "status": "tool_error", "http": 200})
+				j.Artifact(run, "code-1.go", []byte(`tool.Call("get_tool", map[string]any{"slug": "zorblax-search-api"})`))
 				j.Artifact(run, "answer.txt", []byte("NONE\n"))
 			} else {
 				j.Event(run, "call", map[string]any{"tool": "get_tool", "status": "ok", "http": 200})
+				if len(task.About) > 0 { // a trap's program names the thing it asks about
+					j.Artifact(run, "code-1.go", []byte(`tool.Call("search_tools", map[string]any{"query": "`+task.About[0]+`"})`))
+				}
 			}
 			j.Event(run, "eval.end", map[string]any{"task": task.ID, "status": status})
 			passes[p] = append(passes[p], eval.TaskResult{ID: task.ID, Level: task.Level, Status: status, WallMs: 1000})
@@ -81,7 +85,8 @@ func TestEvalRescore(t *testing.T) {
 		b, _ := os.ReadFile(f)
 		events.Write(b)
 	}
-	if e := events.String(); strings.Count(e, `"eval.rescored"`) != 1 || !strings.Contains(e, `"points":100`) || !strings.Contains(e, `"passes":3`) || strings.Contains(e, "NONE") {
+	// two steps, 1 to 2 and 2 to 3, an event each
+	if e := events.String(); strings.Count(e, `"eval.rescored"`) != 2 || !strings.Contains(e, `"points":100`) || !strings.Contains(e, `"passes":3`) || strings.Contains(e, "NONE") {
 		t.Errorf("the harness's events:\n%s", e)
 	}
 

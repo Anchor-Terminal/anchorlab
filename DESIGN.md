@@ -464,6 +464,70 @@ small, they use the standard library only, and they treat everything above as da
   (`eval.rescored`). `anchor-lab eval -rescore` prints the same thing and keeps nothing, so the
   change can be read before the harness that makes it is installed. Both versions' scores stay
   in `eval.ndjson`: version 1's are the record of what was published under it.
+- **A third version: the box's failures aren't the model's, and a trap needs a look at the thing
+  asked.** A review of the harness at `fd6f6d6` on 23 November 2026, by another model with
+  fixtures of its own, found seven faults, and each was true of the code. Four were in how an
+  answer is checked, so they're `anchor-lab-eval/3` (and `anchor-lab-eval-hard/2`), graded again
+  from the journal like version 2 was (`eval.Rescore3`, `eval.CarryAll`):
+  - *A model's server that failed was the model's miss.* A request that failed ended the
+    question with no answer, which scores as wrong. Now the model's client says which failures
+    are its server's (`brain.Down`: no connection, a dropped one, a reply past the harness's own
+    timeout, 5xx, 404 for a model it doesn't have, 401, 403, 429, or a 200 that isn't a chat
+    completion) and which are the conversation's (400 and 422, after the harness has already
+    retried with less of it). gBench draws the same line for its agentic suite's requests, and
+    doesn't score its harness's errors either. A question a server or a cell failed under is
+    asked again once after 20 seconds, then is `failed`: left out of the score, counted in the
+    score's `failed`, and not written into the checkpoint, so a stop asks it again. More than one
+    question in fifty failed (gBench's line for failed requests is 2% too) and no score is kept,
+    since it would be over other questions than other models' scores, and the next run asks only
+    the failed ones. A model that got every reply and gave no answer is still no-answer.
+  - *Any 404 justified a NONE.* Version 2 let a 404 count as the lookup on a NONE trap, and the
+    review fetched another listing, got its 404, answered NONE and was right. Now each trap names
+    what it's about (`Task.About`, words like `zorblax` or `gpt-7`) and the files that list every
+    candidate (`Task.Covers`, `rankings.json`, `prices.json`, `categories.json`), and only a lookup
+    whose path or arguments hold one of the words, and that was answered, or a read of a covering
+    file, counts. A provider's error for the right listing doesn't, since it says nothing about
+    whether the listing is there. To tell, the gateway keeps each call's arguments in memory
+    (`gateway.Call.Args`), never in an event or a result.
+  - *A refused call to a ruled-out tool vanished.* The tally skipped calls the gateway refused
+    before it checked the task's ruled-out names, so a model that tried `submit_review` against
+    "don't call it" was right if the gateway stopped it. The model is what's graded and the
+    gateway refusing is the lab protecting the server, so an attempt counts, sent or not
+    (`TaskResult.Tried` counts the refused ones).
+  - *"1/2" was 12.* The number reader took out everything that wasn't a digit. Now an amount is
+    one number with a currency, a percent sign, commas between thousands or a unit word around
+    it, and two numbers, or two joined by a slash, an operator or a dash, isn't one.
+
+  Grading the saved runs again works from what the journal has. A no-answer pass in a run with a
+  `model.failed` or `cell.failed` event is failed (an old `model.failed` didn't say whose it was,
+  and is taken as the server's, since a refused request is retried with less of the conversation
+  first). A right pass with a call event for a ruled-out tool, of any status, is wrong. The
+  events don't keep paths or arguments, so a right pass of a trap stands only if the run's own
+  programs and replies (`code-*.go`, `model-*.txt`) name the thing or a covering file, which can
+  pass a program that named it on a line that never ran, never the other way. A right number
+  stands only if `answer.txt` reads as one number, the same one. From now on `model.failed`
+  says `down`, and `eval.end` carries `about` and `tried`, so a later version can be graded again
+  from the events alone.
+- **The other three faults are the harness's, and change no set.** A plain API's answer that
+  broke off before its declared length was `ok`, and the half body went to the program. It's now
+  `incomplete`, with its status and byte count kept, and an MCP answer that broke off before its
+  JSON-RPC message was whole is too; the status words are the gateway's, never the result format's,
+  which counts anything not `ok` as an error. A checkpoint cut short in the middle of a line had
+  the next line written onto the end of it, and both were lost on the next start, so the question
+  after a stop was asked twice. Every file of lines the lab appends to (the checkpoint, the
+  events, `results.ndjson`, `eval.ndjson`, `bench.ndjson`) now ends a cut-short last line first
+  (`journal.MendTail`), keeping it as a line of its own so a reader that counts lines keeps its
+  place, and a checkpoint that can't be written says so. A folded bench score added its passes'
+  wall time where its own comment says it's one pass's, so a three-pass score looked three times
+  slower than a one-pass one. It's one pass's now, with the total in `allMs`, and a score folded
+  before is put right when it's read.
+- **A vendor's explore the box failed under isn't written.** The same outage counted against a
+  vendor's server: a model's server that fell over in the middle of an explore ended the run,
+  and the calls so far were written as the server's `failure` or `partial`. Now an explore the
+  model's server or a cell failed under before every tool had answered isn't written at all
+  (`explore.withheld` in the events, `Result.Withheld`, which isn't part of the format), and the
+  server is tested again on the next round rather than after the retest interval. One that got
+  every tool to answer before the failure is written, since it's a success either way.
 - **What the lab is doing shows where Vlad looks.** Vlad, 18 November 2026, of the admin page's Lab
   tab: "i should see what it's doing on the lab page, that's where i wanted it". The stats carry
   the evaluation in progress (which question of which pass, how many right, wrong and skipped so
@@ -887,6 +951,10 @@ real run, because the page should be shaped by what the results look like.
 
 ## Open
 
+- **What grading the saved runs again under version 3 changes.** `eval.Rescore3` is tested on
+  made-up journals. On the box, `anchor-lab eval -rescore` says what each model loses before the
+  harness that keeps the new scores is installed. A score can only go down or stay, apart from a
+  question the box failed under leaving it, which changes what the score is out of.
 - **What grading the eleven saved runs again changes.** `eval.Rescore` is tested on made-up
   journals, not on the box's. The four traps are level 2, so a model can gain up to 8 of the 110
   weighted points. `anchor-lab eval -rescore` on the box says what each model gains, before the

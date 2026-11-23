@@ -229,9 +229,18 @@ func run(args []string) error {
 					journal.QueueRetest(*state, rq.Model, slugs[i:])
 					break
 				}
+				withheld := false
 				for _, r := range agent.Run(ctx, ro, t) {
+					if r.Withheld != "" {
+						fmt.Printf("%s %-8s %s (retest, %s): not written, the %s failed under it\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, rq.Model, r.Withheld)
+						withheld = true
+						continue
+					}
 					fmt.Printf("%s %-8s %s (retest, %s): %s, %s, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, rq.Model, r.Status, r.Outcome, r.Calls, r.Errors)
 					last[key(t.Slug, rq.Model)] = r.Ended
+				}
+				if withheld {
+					delete(last, key(t.Slug, rq.Model)) // tested again on the next round
 				}
 				if ctx.Err() != nil {
 					// stopped part way through this one, which is tested again with the rest
@@ -280,11 +289,22 @@ func run(args []string) error {
 			if *only == "" && time.Since(last[key(t.Slug, o.Model)]) < *retest {
 				continue
 			}
+			withheld := false
 			for _, r := range agent.Run(ctx, o, t) {
+				if r.Withheld != "" {
+					// the box failed under the explore: nothing written, and the server is tested
+					// again on the next round instead of after -retest
+					fmt.Printf("%s %-8s %s: not written, the %s failed under it\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, r.Withheld)
+					withheld = true
+					continue
+				}
 				fmt.Printf("%s %-8s %s: %s, %s, %d tools, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, r.Status, r.Outcome, r.Tools, r.Calls, r.Errors)
 				if ctx.Err() == nil { // a test a pause cut short is tested again after it
 					last[key(t.Slug, o.Model)] = r.Ended
 				}
+			}
+			if withheld {
+				delete(last, key(t.Slug, o.Model))
 			}
 			tested++
 			sleep(ctx, *pause)

@@ -415,14 +415,27 @@ so data that changed while the model worked doesn't cost it the task. A task who
 site, or that has two right answers right now (a tie), is skipped for that pass, and one where the
 site didn't answer the harness isn't counted. An answer with no lookup behind it is wrong: the
 question is about the site today, not what a model remembers. On the four traps whose right answer
-is NONE, being told the thing isn't there (a 404, a tool's "no such listing") is that lookup.
+is NONE, being told the thing isn't there (a 404, a tool's "no such listing") is that lookup, but
+only when it was about the thing asked: a path or arguments naming it (`Task.About`), or a read of
+a file that lists every candidate (`Task.Covers`). Another listing's 404 isn't. A call to a tool the
+task rules out makes the answer wrong whether or not the gateway let it through, and an amount is
+one number: "1/2" isn't 12.
 
-That last rule is what makes this `anchor-lab-eval/2`. Version 1 counted only a lookup that
-answered, so a model that asked, was told no and answered NONE was marked wrong. Scores of version
-1 aren't run again: the harness grades each model's latest one again from its own run's journal
-when it starts, on those four tasks only, and keeps it as a score of version 2 with `from` saying
-so. `anchor-lab eval -rescore` prints what that changes, model by model, and keeps nothing. A
-score whose run isn't in the journal has no version 2 score until the model runs again.
+A question the model's server or a cell failed under, before the model could answer, is asked
+again once after 20 seconds. If it fails again it's `failed`: not scored, since it measured the box,
+and counted in the score's `failed`. Over one question in fifty failed and the evaluation keeps no
+score; the next run asks only those questions again. A model that got every reply it asked for and
+gave no answer is still a miss. The same goes for a vendor's server: an explore the box failed under
+before every tool had answered isn't written, and the server is tested again on the next round.
+
+That is `anchor-lab-eval/3` (and `anchor-lab-eval-hard/2`, the same checks). Version 2 let any 404
+justify a NONE, scored the box's failures as misses, missed refused calls to ruled-out tools and read
+"1/2" as 12. Version 1 counted only a lookup that answered, so a model that asked, was told no and
+answered NONE was marked wrong. Scores of older versions aren't run again: the harness grades each
+model's latest one again from its own run's journal when it starts, a version at a time, and keeps
+it as a score of the newest with `from` saying which version it was first graded under. `anchor-lab
+eval -rescore` prints what that changes, model by model, and keeps nothing. A score whose run isn't
+in the journal has no newer score until the model runs again.
 
 `anchor-lab eval` run by you asks the lab to run it, like a bench (`eval-*.request` in the inbox),
 and the site's admin page can ask too. Scores go to `eval.ndjson`, each model's latest is served at
@@ -431,7 +444,7 @@ cut short, which are ours to make smaller.
 
 ### The hard set
 
-`-set hard` is a second list of questions (`eval/hard.go`, `anchor-lab-eval-hard/1`), 66 of them,
+`-set hard` is a second list of questions (`eval/hard.go`, `anchor-lab-eval-hard/2`), 66 of them,
 for when the normal set stops telling models apart. The levels count as they do in the normal set:
 9 at level 1, 28 at level 2, 29 at level 3. Every one has more to get right than the normal set's
 hardest:
@@ -469,9 +482,11 @@ anchor-lab eval -grade answers.json -before before.json
 anchor-lab eval -grade pass1.json,pass2.json,pass3.json -before before.json   # three passes, scored together
 ```
 
-`answers.json` is `[{"id", "answer", "called": [tool names, lab.fetch for a fetch], "lookups", "asked"}]`:
-what was answered and what was called to get there, taken from a log and not from the model's own
-account. The grading is `eval.GradeGiven`, the same checks a model on the box gets: against the
+`answers.json` is `[{"id", "answer", "looked": [{"tool", "what", "answered"}]}]`: what was answered
+and every call and fetch made to get there (the tool, lab.fetch for a fetch; a fetch's path or a
+call's arguments as JSON; and `ok`, `none` for "it isn't there" or `error`), taken from a log and not
+from the model's own account. The older form, `"called": [tool names], "lookups", "asked"`, is still
+read, with the older check on the NONE traps, since it doesn't say what each lookup was about. The grading is `eval.GradeGiven`, the same checks a model on the box gets: against the
 snapshot, then against the site now, wrong with no lookup, wrong after a call to a tool the task
 rules out. What it can't reproduce is the harness itself: the limits on turns, the cells, a fresh
 conversation for every question. A score made this way says so when it's printed, and isn't kept.

@@ -80,6 +80,11 @@ type Result struct {
 	CellMs       int64 `json:"cellMs"`
 
 	PerTool []ToolResult `json:"perTool,omitempty"`
+
+	// Withheld is an explore the box failed under (the model's server or a cell, before every
+	// tool had answered), which is never written: it would put our failing on the server's
+	// record. The harness tests the server again sooner. Not part of the format.
+	Withheld string `json:"-"`
 }
 
 // ToolResult is what happened to one tool of the server in a run.
@@ -131,7 +136,11 @@ func (j *Journal) Event(run, ev string, fields map[string]any) {
 		if j.f != nil {
 			j.f.Close()
 		}
-		f, err := os.OpenFile(filepath.Join(j.dir, "events", day+".ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+		path := filepath.Join(j.dir, "events", day+".ndjson")
+		if err := MendTail(path); err != nil {
+			fmt.Fprintln(os.Stderr, "journal:", err)
+		}
+		f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "journal:", err)
 			return
@@ -216,7 +225,11 @@ func (j *Journal) Result(r Result) error {
 	}
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	f, err := os.OpenFile(filepath.Join(j.dir, "results.ndjson"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	path := filepath.Join(j.dir, "results.ndjson")
+	if err := MendTail(path); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {
 		return err
 	}
@@ -552,4 +565,52 @@ func PausedUntil(state string, now time.Time) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return until.UTC(), true
+}
+
+// MendTail ends a file's last line when a stop in the middle of a write left it cut short, so the
+// next line appended starts on a line of its own. Without it the next line is joined to the
+// broken one and lost with it on the next read. The broken line stays, as a line on its own
+// that readers skip, so a reader that counts lines (Results) keeps its place. A file that
+// doesn't exist, is empty or already ends a line is left alone.
+func MendTail(path string) error {
+	f, err := os.OpenFile(path, os.O_RDWR, 0)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	st, err := f.Stat()
+	if err != nil || st.Size() == 0 {
+		return err
+	}
+	last := make([]byte, 1)
+	if _, err := f.ReadAt(last, st.Size()-1); err != nil {
+		return err
+	}
+	if last[0] == '\n' {
+		return nil
+	}
+	if _, err := f.WriteAt([]byte{'\n'}, st.Size()); err != nil {
+		return err
+	}
+	return f.Sync()
+}
+
+// AppendLine appends one line to a file of lines, made if it's missing: the last line mended
+// first (MendTail), and the file synced, so a score written is a score kept.
+func AppendLine(path string, line []byte) error {
+	if err := MendTail(path); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o640)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	if _, err := f.Write(append(line, '\n')); err != nil {
+		return err
+	}
+	return f.Sync()
 }

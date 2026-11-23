@@ -135,6 +135,9 @@ func evalCmd(args []string) error {
 	if s.Unreachable > 0 {
 		fmt.Printf("  %d tasks found the site or its MCP server not answering, and aren't counted\n", s.Unreachable)
 	}
+	if s.Failed > 0 {
+		fmt.Printf("  %d tasks the model's server or a cell failed under, asked twice, and aren't counted\n", s.Failed)
+	}
 	return nil
 }
 
@@ -180,7 +183,7 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	if done, by := cp.Count(); why == "resumed" {
 		// the stats' progress counts on from here, so the questions done before the stop still count
 		j.Event("", "eval.resume", map[string]any{"model": model, "started": cp.Started, "done": done, "right": by[eval.StatusCorrect],
-			"wrong": by[eval.StatusWrong] + by[eval.StatusNoAnswer], "skipped": by[eval.StatusSkipped], "unreachable": by[eval.StatusUnreachable], "stops": cp.Stops})
+			"wrong": by[eval.StatusWrong] + by[eval.StatusNoAnswer], "skipped": by[eval.StatusSkipped], "unreachable": by[eval.StatusUnreachable] + by[eval.StatusFailed], "stops": cp.Stops})
 	} else if why != "new" {
 		j.Event("", "eval.restart", map[string]any{"model": model, "why": why})
 	}
@@ -195,6 +198,11 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	case s.Unreachable*2 > s.Runs*s.Tasks:
 		cp.Finish()
 		return s, errors.New("the site or its MCP server didn't answer most of the tasks; no score kept")
+	case s.Failed > eval.MaxFailed(s.Runs, s.Tasks):
+		// the questions that went through are kept and the failed ones weren't written down, so
+		// the next evaluation of this model asks only those
+		cp.Stop(time.Since(began))
+		return s, fmt.Errorf("the model's server or the box failed under %d questions, more than the %d a score may leave out; no score kept, and the next run asks those again (journalctl -u llama-server, -u anchor-lab-cell.socket)", s.Failed, eval.MaxFailed(s.Runs, s.Tasks))
 	}
 	if err := eval.Save(state, s); err != nil {
 		cp.Stop(time.Since(began)) // the questions are still good: try again from them
@@ -209,13 +217,13 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 // an answer is checked doesn't leave the lab with no scores until every model has run again. The
 // harness does it when it starts, as itself, and a second start finds nothing to do.
 func carryScores(j *journal.Journal, state string) {
-	done, lost, err := eval.RescoreAll(state, true)
+	done, lost, err := eval.CarryAll(state, true)
 	for _, r := range done {
-		j.Event("", "eval.rescored", map[string]any{"model": r.Model, "mode": r.Mode, "from": eval.Version1, "set": eval.Version,
-			"was": r.Was, "points": r.Now, "passes": r.Flips(), "missing": r.Missing, "disagree": len(r.Disagree)})
+		j.Event("", "eval.rescored", map[string]any{"model": r.Model, "mode": r.Mode, "from": r.From, "set": r.To,
+			"was": r.Was, "points": r.Now, "passes": r.Flips(), "missing": r.Missing, "disagree": len(r.Disagree), "failed": r.Unscored})
 	}
 	for _, s := range lost {
-		j.Event("", "eval.unscored", map[string]any{"model": s.Model, "mode": s.ModeOf(), "from": eval.Version1})
+		j.Event("", "eval.unscored", map[string]any{"model": s.Model, "mode": s.ModeOf(), "from": s.V})
 	}
 	if err != nil {
 		j.Event("", "eval.rescore.failed", map[string]any{"kept": len(done)})
@@ -225,15 +233,16 @@ func carryScores(j *journal.Journal, state string) {
 // evalRescore prints what grading the old scores again changes, model by model, and with keep
 // saves the new ones. Reading needs no more than the anchorlab group has.
 func evalRescore(out io.Writer, state string, keep bool) error {
-	done, lost, err := eval.RescoreAll(state, keep)
+	done, lost, err := eval.CarryAll(state, keep)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%s to %s, from each run's own journal. No model is asked and nothing runs.\n", eval.Version1, eval.Version)
-	fmt.Fprintln(out, "Only a pass of a NONE trap can change, from wrong to right: the model asked, was told there's no such thing, and answered NONE.")
+	fmt.Fprintf(out, "Each model's latest score brought up to %s (and the hard set's to %s), from each run's own journal. No model is asked and nothing runs.\n", eval.Version, eval.HardVersion)
+	fmt.Fprintf(out, "From %s to %s only a pass of a NONE trap can change, from wrong to right: the model asked, was told there's no such thing, and answered NONE.\n", eval.Version1, eval.Version2)
+	fmt.Fprintf(out, "From %s a pass the box failed under leaves the score, and a right pass becomes wrong when it asked for a tool the task rules out, when a NONE trap's run never looked at the thing asked, or when a number answer isn't one number.\n", eval.Version2)
 	if len(done) > 0 {
 		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "\nmodel\tmode\twas\tnow\tright\tpasses changed")
+		fmt.Fprintln(tw, "\nmodel\tmode\tfrom\tto\twas\tnow\tright\tpasses changed")
 		for _, r := range done {
 			var which []string
 			for _, id := range sortedKeys(r.Flipped) {
@@ -243,23 +252,26 @@ func evalRescore(out io.Writer, state string, keep bool) error {
 			if len(which) > 0 {
 				note = " (" + strings.Join(which, ", ") + ")"
 			}
+			if r.Unscored > 0 {
+				note += fmt.Sprintf("; %d passes the box failed under, left out", r.Unscored)
+			}
 			if r.Missing > 0 {
-				note += fmt.Sprintf("; %d passes of the traps aren't in the journal and stay as they were", r.Missing)
+				note += fmt.Sprintf("; %d passes aren't in the journal and stay as they were", r.Missing)
 			}
 			if len(r.Disagree) > 0 {
 				note += "; the journal and the score disagree on " + strings.Join(r.Disagree, ", ") + ", left as it was"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d to %d\t%d%s\n", r.Model, r.Mode, r.Was, r.Now, r.WasRight, r.NowRight, r.Flips(), note)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%d to %d\t%d%s\n", r.Model, r.Mode, r.From, r.To, r.Was, r.Now, r.WasRight, r.NowRight, r.Flips(), note)
 		}
 		tw.Flush()
 		if keep {
-			fmt.Fprintf(out, "\nkept: %d scores of %s, beside the old ones in %s\n", len(done), eval.Version, filepath.Join(state, eval.File))
+			fmt.Fprintf(out, "\nkept: %d scores, beside the old ones in %s and %s\n", len(done), filepath.Join(state, eval.File), filepath.Join(state, eval.HardFile))
 		} else {
 			fmt.Fprintln(out, "\nnot kept: the lab keeps them itself when it next starts")
 		}
 	}
 	for _, s := range lost {
-		fmt.Fprintf(out, "%s (%s mode, %d): its run isn't in the journal, so it has no score of %s until it runs again\n", s.Model, s.ModeOf(), s.Points, eval.Version)
+		fmt.Fprintf(out, "%s (%s mode, %d, %s): its run isn't in the journal, so it has no score of the newer version until it runs again\n", s.Model, s.ModeOf(), s.Points, s.V)
 	}
 	if len(done) == 0 && len(lost) == 0 {
 		now, _ := eval.Load(state)

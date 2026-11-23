@@ -912,7 +912,9 @@ func progress(state string, t time.Time) *Progress {
 					p.Wrong++
 				case "skipped":
 					p.Skipped++
-				case "unreachable":
+				case "unreachable", "failed":
+					// a question the box failed under isn't counted either: the site's admin page
+					// shows both as the questions left out
 					p.Unreachable++
 				}
 			}

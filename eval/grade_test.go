@@ -69,7 +69,7 @@ func TestGradeGiven(t *testing.T) {
 	}
 	// the normal set's NONE traps count being told too, since its second version, and no other
 	// task of it does: a change to either is a change to how an answer is checked, and a new version
-	if Version != "anchor-lab-eval/2" {
+	if Version != "anchor-lab-eval/3" {
 		t.Errorf("the normal set is %s: say here which tasks count a not-found in it", Version)
 	}
 	for _, task := range Tasks {

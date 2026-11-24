@@ -603,9 +603,9 @@ var hardCapabilities = []string{"web.search", "web.scrape", "web.extract", "web.
 // a page to read, and traps where the thing asked about is almost there.
 var HardTasks = []Task{
 	// ---- level 1: two lookups joined, or a trap
-	{ID: "hard-near-slug", Level: 1, Kind: None, NotFoundCounts: true, About: []string{"stripe"}, Covers: []string{"/api/v1/rankings.json"}, Ask: "What grade does Anchor Terminal give its listing with the slug stripe-api?",
+	{ID: "hard-near-slug", Level: 1, Kind: None, NotFoundCounts: true, About: []string{"stripe-api"}, Covers: []string{"/api/v1/rankings.json"}, Ask: "What grade does Anchor Terminal give its listing with the slug stripe-api?",
 		Want: absent(func(ctx context.Context, s *Sources) error { _, err := s.Listing(ctx, "stripe-api"); return err })},
-	{ID: "hard-wrong-provider", Level: 1, Kind: None, NotFoundCounts: true, About: []string{"gpt-6.2", "anthropic-api"}, Covers: []string{"/api/v1/prices.json"}, Ask: "By Anchor Terminal's price list, what does gpt-6.2-sol cost per million input tokens on anthropic-api?",
+	{ID: "hard-wrong-provider", Level: 1, Kind: None, NotFoundCounts: true, About: []string{"anthropic-api"}, Covers: []string{"/api/v1/prices.json"}, Ask: "By Anchor Terminal's price list, what does gpt-6.2-sol cost per million input tokens on anthropic-api?",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			// the trap is that the model is real and sold elsewhere: without that it's another question
 			if _, err := s.Model(ctx, "openai-api", "gpt-6.2-sol"); err == ErrGone {

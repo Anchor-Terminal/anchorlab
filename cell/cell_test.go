@@ -3,6 +3,7 @@ package cell
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -128,5 +129,41 @@ func TestHarnessDistrustsTheCell(t *testing.T) {
 		if _, err := Run(context.Background(), a, "package main", time.Second, func(string, json.RawMessage) any { return nil }); err == nil {
 			t.Errorf("Run took %.40q", lines)
 		}
+	}
+}
+
+// What the program does wrong is the program's: too big, a tool name too long, a call bigger than
+// a line. Run says so with ErrProgram, which the harness tells the model, where anything else
+// wrong with the cell is the box's.
+func TestProgramBreaksTheRules(t *testing.T) {
+	a, _ := net.Pipe()
+	if _, err := Run(context.Background(), a, "package main\n"+strings.Repeat("//", maxSource), time.Second, nil); !errors.Is(err, ErrProgram) {
+		t.Errorf("a program over the limit: %v", err)
+	}
+	for _, lines := range []string{
+		`{"op":"call","id":1,"tool":"` + strings.Repeat("x", 300) + `"}` + "\n",
+		strings.Repeat("a", maxLine+10) + "\n",
+	} {
+		a, b := net.Pipe()
+		go func() {
+			buf := make([]byte, 1<<16)
+			b.Read(buf)
+			b.Write([]byte(lines))
+			b.Close()
+		}()
+		if _, err := Run(context.Background(), a, "package main", time.Second, func(string, json.RawMessage) any { return nil }); !errors.Is(err, ErrProgram) {
+			t.Errorf("%.40q: %v", lines, err)
+		}
+	}
+	// a cell that goes out of order is the box's
+	a, b := net.Pipe()
+	go func() {
+		buf := make([]byte, 1<<16)
+		b.Read(buf)
+		b.Write([]byte(`{"op":"call","id":7,"tool":"x"}` + "\n"))
+		b.Close()
+	}()
+	if _, err := Run(context.Background(), a, "package main", time.Second, func(string, json.RawMessage) any { return nil }); err == nil || errors.Is(err, ErrProgram) {
+		t.Errorf("a call out of order: %v", err)
 	}
 }

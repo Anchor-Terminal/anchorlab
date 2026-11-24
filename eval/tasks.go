@@ -801,13 +801,15 @@ func (t Task) about(looked []lookup) int {
 				break
 			}
 		}
-		if !hit && l.fetch && l.answered == "ok" {
+		if !hit && l.answered == "ok" {
+			// a read of a covering file: by lab.fetch, its path; by a tool (read_page), its
+			// arguments naming the path
 			p := what
-			if i := strings.IndexAny(p, "?#"); i >= 0 {
+			if i := strings.IndexAny(p, "?#"); l.fetch && i >= 0 {
 				p = p[:i]
 			}
 			for _, c := range t.Covers {
-				if strings.HasSuffix(p, c) { // a path, or the whole address with the path on the end
+				if l.fetch && strings.HasSuffix(p, c) || !l.fetch && strings.Contains(p, c) {
 					hit = true
 					break
 				}

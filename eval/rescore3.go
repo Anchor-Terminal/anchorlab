@@ -76,6 +76,7 @@ type run3 struct {
 	lookups, asked int
 	boxFailed      bool // the model's server or a cell failed in it
 	forbidden      bool // it asked for a tool the task rules out, sent or not
+	trimmed        bool // its conversation was cut to fit the model's context
 }
 
 // Rescore3 grades a saved score of the set's previous version again by this version's rules,
@@ -156,8 +157,13 @@ func Rescore3(dir string, set Set, old Score) (Regrade, error) {
 				if e.OK || e.HTTP == 404 || e.HTTP == 410 {
 					r.asked++
 				}
+			case "model.trimmed":
+				r.trimmed = true
 			case "model.failed":
-				if e.Down == nil || *e.Down {
+				// an old event doesn't say whose failure it was. After the conversation had to be
+				// cut to fit, a refusal is likeliest the conversation outgrowing the context,
+				// which is the model's; otherwise it's taken as the server's
+				if e.Down != nil && *e.Down || e.Down == nil && !r.trimmed {
 					r.boxFailed = true
 				}
 			case "cell.failed":
@@ -212,10 +218,10 @@ func Rescore3(dir string, set Set, old Score) (Regrade, error) {
 			}
 			now := was
 			switch {
+			case r.forbidden && (was == StatusCorrect || was == StatusNoAnswer):
+				now = StatusWrong // a ruled-out call stays wrong whatever failed after it
 			case was == StatusNoAnswer && r.boxFailed:
 				now = StatusFailed
-			case was == StatusCorrect && r.forbidden:
-				now = StatusWrong
 			case was == StatusCorrect && len(t.About) > 0 && !lookedAbout(dir, old.Model, id, run, t):
 				now = StatusWrong
 			case was == StatusCorrect && t.Kind == None && !stillNone(dir, old.Model, id, run):
@@ -268,16 +274,28 @@ func Rescore3(dir string, set Set, old Score) (Regrade, error) {
 	return out, nil
 }
 
-// runText is everything the model wrote in a question's run that could hold what it looked at:
-// its programs and its replies (a native call's arguments are written into the reply's file).
+// runText is what a question's run looked up with: its programs (code-*.go), and the native calls
+// written into its replies' files, a line "[call name] arguments" each. Not the replies' prose,
+// which repeats the slug it was asked about whether or not it looked.
 func runText(dir, model, task, run string) string {
 	folder := filepath.Join(dir, journal.Folder(model, "anchor-lab-eval", task, run))
 	var b strings.Builder
-	for _, pat := range []string{"code-*.go", "model-*.txt"} {
-		files, _ := filepath.Glob(filepath.Join(folder, pat))
-		for _, f := range files {
-			if raw, err := os.ReadFile(f); err == nil {
-				b.Write(raw)
+	codes, _ := filepath.Glob(filepath.Join(folder, "code-*.go"))
+	for _, f := range codes {
+		if raw, err := os.ReadFile(f); err == nil {
+			b.Write(raw)
+			b.WriteByte('\n')
+		}
+	}
+	replies, _ := filepath.Glob(filepath.Join(folder, "model-*.txt"))
+	for _, f := range replies {
+		raw, err := os.ReadFile(f)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "[call ") {
+				b.WriteString(line)
 				b.WriteByte('\n')
 			}
 		}
@@ -412,7 +430,9 @@ func carry3(state string, set Set, keep bool, extra []Score) ([]Regrade, []Score
 			continue
 		}
 		r, err := Rescore3(filepath.Join(state, "eval"), set, s)
-		if err != nil {
+		if err != nil || r.Score.Failed > MaxFailed(r.Score.Runs, r.Score.Tasks) || r.Score.Scored == 0 {
+			// a run the box failed under too often would be kept here with questions left out
+			// that a run now wouldn't be allowed to leave out (runEval): it isn't carried
 			lost = append(lost, s)
 			continue
 		}

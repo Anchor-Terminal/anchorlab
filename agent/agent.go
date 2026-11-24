@@ -329,6 +329,14 @@ func (o Options) explore(ctx context.Context, run string, sess *gateway.Session,
 		res, err := cell.Run(ctx, conn, code, o.JobTimeout, func(tool string, args json.RawMessage) any {
 			return sess.CallTool(ctx, tool, args)
 		})
+		if errors.Is(err, cell.ErrProgram) {
+			// the program broke the cell's rules: the model's doing, and it hears why
+			r.Builds++
+			r.BuildFails++
+			j.Event(run, "program.refused", map[string]any{"turn": turn})
+			msgs = append(msgs, brain.Message{Role: "user", Content: "The cell refused the program: " + strings.TrimPrefix(err.Error(), cell.ErrProgram.Error()+": ") + ". Write a smaller one, or reply DONE."})
+			continue
+		}
 		if err != nil {
 			j.Event(run, "cell.failed", map[string]any{"turn": turn, "why": err.Error()})
 			if ctx.Err() != nil {

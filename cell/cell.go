@@ -240,12 +240,17 @@ type Outcome struct {
 	Calls     int
 }
 
+// ErrProgram is a run the program itself broke the cell's rules in: a program too big, a call
+// with a tool name or arguments too long. The model's doing, not the box's, so it's told to the
+// model like a build error and doesn't count as the cell failing.
+var ErrProgram = errors.New("the program broke the cell's rules")
+
 // Run sends source to the cell on conn and answers its tool calls with onCall until it's done.
 // ctx ending closes conn, which ends the cell.
 func Run(ctx context.Context, conn io.ReadWriteCloser, source string, timeout time.Duration, onCall func(tool string, args json.RawMessage) any) (Outcome, error) {
 	var out Outcome
 	if len(source) > maxSource {
-		return out, errors.New("the program is over 256 KB")
+		return out, fmt.Errorf("%w: the program is over 256 KB", ErrProgram)
 	}
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
@@ -265,6 +270,9 @@ func Run(ctx context.Context, conn io.ReadWriteCloser, source string, timeout ti
 			if ctx.Err() != nil {
 				return out, ctx.Err()
 			}
+			if errors.Is(err, errTooLong) {
+				return out, fmt.Errorf("%w: a tool call bigger than the cell takes", ErrProgram)
+			}
 			return out, fmt.Errorf("cell: %w", err)
 		}
 		switch m.Op {
@@ -272,7 +280,10 @@ func Run(ctx context.Context, conn io.ReadWriteCloser, source string, timeout ti
 			out.Built, out.BuildMs, out.BuildErr = m.OK, m.Ms, clip(m.Stderr, maxDiag)
 		case "call":
 			out.Calls++
-			if m.ID != out.Calls || len(m.Tool) > 256 {
+			if len(m.Tool) > 256 {
+				return out, fmt.Errorf("%w: a tool name over 256 characters", ErrProgram)
+			}
+			if m.ID != out.Calls {
 				return out, errors.New("cell: a call out of order")
 			}
 			reply, err := json.Marshal(onCall(m.Tool, m.Args))

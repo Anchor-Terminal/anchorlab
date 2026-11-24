@@ -240,7 +240,10 @@ func run(args []string) error {
 					last[key(t.Slug, rq.Model)] = r.Ended
 				}
 				if withheld {
-					delete(last, key(t.Slug, rq.Model)) // tested again on the next round
+					// the request left the inbox when it was taken: put this server back in it,
+					// since the main round only tests with the lab's own model
+					delete(last, key(t.Slug, rq.Model))
+					journal.QueueRetest(*state, rq.Model, []string{slug})
 				}
 				if ctx.Err() != nil {
 					// stopped part way through this one, which is tested again with the rest

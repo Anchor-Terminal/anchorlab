@@ -480,13 +480,22 @@ small, they use the standard library only, and they treat everything above as da
     score's `failed`, and not written into the checkpoint, so a stop asks it again. More than one
     question in fifty failed (gBench's line for failed requests is 2% too) and no score is kept,
     since it would be over other questions than other models' scores, and the next run asks only
-    the failed ones. A model that got every reply and gave no answer is still no-answer.
+    the failed ones. A model that got every reply and gave no answer is still no-answer, and a
+    model that called a ruled-out tool before the failure is still wrong. What the model's own
+    program did to the cell (a program over 256 KB, a tool name or a call too long for it,
+    `cell.ErrProgram`) isn't the box failing: the model is told, like a build error, and goes on.
+    An outage doesn't send either mode to its tool-free fallback, which is for a server that
+    refuses tools, so the question isn't finished in a conversation the outage changed. The event
+    for a failed question is `question.failed`; `eval.failed` stays the whole evaluation failing.
   - *Any 404 justified a NONE.* Version 2 let a 404 count as the lookup on a NONE trap, and the
     review fetched another listing, got its 404, answered NONE and was right. Now each trap names
     what it's about (`Task.About`, words like `zorblax` or `gpt-7`) and the files that list every
     candidate (`Task.Covers`, `rankings.json`, `prices.json`, `categories.json`), and only a lookup
     whose path or arguments hold one of the words, and that was answered, or a read of a covering
-    file, counts. A provider's error for the right listing doesn't, since it says nothing about
+    file (by `lab.fetch`, or a tool such as `read_page` asked for its path), counts. The words are
+    the thing asked about and not what's near it: `stripe-api` and not `stripe`, whose listing is
+    real and is the trap; `anthropic-api` and not the model's id, which is listed under another
+    provider. A provider's error for the right listing doesn't, since it says nothing about
     whether the listing is there. To tell, the gateway keeps each call's arguments in memory
     (`gateway.Call.Args`), never in an event or a result.
   - *A refused call to a ruled-out tool vanished.* The tally skipped calls the gateway refused
@@ -496,15 +505,21 @@ small, they use the standard library only, and they treat everything above as da
     (`TaskResult.Tried` counts the refused ones).
   - *"1/2" was 12.* The number reader took out everything that wasn't a digit. Now an amount is
     one number with a currency, a percent sign, commas between thousands or a unit word around
-    it, and two numbers, or two joined by a slash, an operator or a dash, isn't one.
+    it, and two numbers, or two joined by a slash, an operator or a dash, isn't one. Nor is a
+    number written onto a name (`gpt-4`, `top-3`, `v2`) or with a scale or a fraction after it
+    (`16k`, `1.5 million`, `12½`), and a typographic minus is a minus.
 
   Grading the saved runs again works from what the journal has. A no-answer pass in a run with a
   `model.failed` or `cell.failed` event is failed (an old `model.failed` didn't say whose it was,
   and is taken as the server's, since a refused request is retried with less of the conversation
-  first). A right pass with a call event for a ruled-out tool, of any status, is wrong. The
+  first, unless that run's conversation had already been cut to fit the context, when the refusal
+  is likeliest the conversation outgrowing it and stays the model's). A score that would leave
+  out more than one question in fifty that way isn't carried, as a run now wouldn't be kept. A right pass with a call event for a ruled-out tool, of any status, is wrong. The
   events don't keep paths or arguments, so a right pass of a trap stands only if the run's own
-  programs and replies (`code-*.go`, `model-*.txt`) name the thing or a covering file, which can
-  pass a program that named it on a line that never ran, never the other way. A right number
+  programs (`code-*.go`) or its native calls (the `[call ...]` lines of `model-*.txt`) name the
+  thing or a covering file. Not a reply's prose, which repeats the slug it was asked about whether
+  or not it looked. This can pass a program that named it on a line that never ran, never the
+  other way. A right number
   stands only if `answer.txt` reads as one number, the same one. From now on `model.failed`
   says `down`, and `eval.end` carries `about` and `tried`, so a later version can be graded again
   from the events alone.
@@ -527,7 +542,8 @@ small, they use the standard library only, and they treat everything above as da
   model's server or a cell failed under before every tool had answered isn't written at all
   (`explore.withheld` in the events, `Result.Withheld`, which isn't part of the format), and the
   server is tested again on the next round rather than after the retest interval. One that got
-  every tool to answer before the failure is written, since it's a success either way.
+  every tool to answer before the failure is written, since it's a success either way. A retest
+  asked for through the inbox that's withheld goes back in the inbox for that model.
 - **What was taken from gBench.** Vlad, 23 November 2026, beside the review: "have a look at
   https://github.com/google-deepmind/gbench ... try to take as many of the good things from the
   google deepmind one". gBench (Google DeepMind's benchmark suite for open models, read at
@@ -562,7 +578,9 @@ small, they use the standard library only, and they treat everything above as da
     questions one is needed.
   - *Smaller ones.* "unknown" isn't a NONE answer any more (a model that doesn't know hasn't said the
     thing isn't there; graded again like the rest). A vendor API's 429 is the API being busy, not
-    the program's argument error to fix. Every file of lines is synced and mended before an append.
+    the program's argument error to fix: it's `http_error` now, where it was `tool_error`, and
+    both count as an error in the result format, so `errors` and `toolsOk` read the same and only
+    the gateway's word changed. Every file of lines is synced and mended before an append.
 
   Not taken, for now: the chat-template probe gBench runs before a model is scored (a pair of
   prompts that tells a broken template from a weak model), a preflight table before a long run,

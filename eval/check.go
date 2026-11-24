@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Kind is how an answer is compared with the right one.
@@ -54,17 +56,33 @@ func norm(s string) string {
 // in it, or two numbers joined by a slash, an operator or a dash, isn't one number and isn't
 // read as one: "1/2" was once read as 12, by taking out everything that wasn't a digit.
 func number(s string) (float64, bool) {
-	s = norm(s)
-	if joiners.MatchString(s) {
+	s = strings.ReplaceAll(norm(s), "−", "-") // a typographic minus is a minus
+	if joiners.MatchString(s) || scaled.MatchString(s) {
 		return 0, false
 	}
-	found := numberToken.FindAllString(s, -1)
-	if len(found) != 1 {
+	at := numberToken.FindAllStringIndex(s, -1)
+	if len(at) != 1 {
 		return 0, false
 	}
-	f, err := strconv.ParseFloat(strings.ReplaceAll(found[0], ",", ""), 64)
+	// a number written onto a word is part of a name (gpt-4, top-3, v2), not an amount
+	if i := at[0][0]; i > 0 {
+		before, _ := utf8.DecodeLastRuneInString(s[:i])
+		if unicode.IsLetter(before) || (before == '-' || before == '+') && i > 1 && unicode.IsLetter(lastRune(s[:i-1])) {
+			return 0, false
+		}
+	}
+	f, err := strconv.ParseFloat(strings.ReplaceAll(s[at[0][0]:at[0][1]], ",", ""), 64)
 	return f, err == nil
 }
+
+func lastRune(s string) rune {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return r
+}
+
+// scaled is a number with a scale or a fraction written after it (16k, 1.5M, 2 million, 12½),
+// which isn't the plain number the model was asked for and can't be read as the figure before it.
+var scaled = regexp.MustCompile(`[0-9](?:\s*(?:k|m|bn|b|thousand|million|billion|trillion)\b|[½¼¾⅓⅔])`)
 
 var isoDate = regexp.MustCompile(`(?:^|[^0-9])(20[0-9]{2}-[01][0-9]-[0-3][0-9])(?:[^0-9]|$)`)
 

@@ -140,7 +140,7 @@ func TestServerDownIsNotTheModels(t *testing.T) {
 // a stop asks it again.
 func TestFailedQuestionAskedAgain(t *testing.T) {
 	task := taskByID("known-top-grade")
-	b := &failing{n: 3, err: &brain.Down{Err: errors.New("connection refused")}} // the first try's request, retry and fallback
+	b := &failing{n: 1, err: &brain.Down{Err: errors.New("connection refused")}} // the first try; an outage gets no tool-free fallback
 	b.replies = []brain.Message{{Role: "assistant", ToolCalls: []brain.ToolCall{call("c1", "lab_fetch", `{"path":"/api/v1/rankings.json"}`)}}, {Role: "assistant", Content: "ANSWER: AA"}}
 	o := reviewOptions(t, b)
 	o.Tasks = []Task{task}
@@ -343,6 +343,9 @@ func TestRescore3(t *testing.T) {
 				j.Event(run, "call", map[string]any{"tool": "submit_review", "status": "refused"})
 			case task.ID == "none-listing" && p == 2: // a 404 about something else
 				j.Artifact(run, "code-1.go", []byte(`tool.Call("lab.fetch", map[string]any{"path": "/api/v1/tools/other.json"})`))
+			case task.ID == "none-tool-count" && p == 1: // its prose names the listing, its program looked elsewhere
+				j.Artifact(run, "model-1.txt", []byte("anchor-quantum-mcp isn't a listing.\n```go\npackage main\n```\nANSWER: NONE"))
+				j.Artifact(run, "code-1.go", []byte(`tool.Call("lab.fetch", map[string]any{"path": "/api/v1/tools/other.json"})`))
 			case task.ID == "none-category" && p == 0: // looked, and answered "unknown", which isn't a NONE now
 				j.Artifact(run, "model-1.txt", []byte(`[call search_tools] {"category":"teleportation"}`))
 				j.Artifact(run, "answer.txt", []byte("unknown\n"))
@@ -365,13 +368,13 @@ func TestRescore3(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := r.Score
-	want := map[string][2]int{"grade-anthropic-api": {2, 2}, "dont-submit": {2, 3}, "none-listing": {2, 3}, "known-grade-count": {2, 3}, "none-category": {2, 3}, "none-model": {3, 3}, "top-search": {3, 3}}
+	want := map[string][2]int{"grade-anthropic-api": {2, 2}, "dont-submit": {2, 3}, "none-listing": {2, 3}, "known-grade-count": {2, 3}, "none-category": {2, 3}, "none-tool-count": {2, 3}, "none-model": {3, 3}, "top-search": {3, 3}}
 	for id, w := range want {
 		if s.PerTask[id] != w {
 			t.Errorf("%s: %v, want %v (was %v)", id, s.PerTask[id], w, old.PerTask[id])
 		}
 	}
-	if s.V != Version || s.From != Version2 || s.Failed != 1 || r.Unscored != 1 || r.Flips() != 5 || len(r.Disagree) != 0 || r.Missing != 0 {
+	if s.V != Version || s.From != Version2 || s.Failed != 1 || r.Unscored != 1 || r.Flips() != 6 || len(r.Disagree) != 0 || r.Missing != 0 {
 		t.Errorf("the new score: %s from %s, failed %d, flips %d, disagree %v, missing %d", s.V, s.From, s.Failed, r.Flips(), r.Disagree, r.Missing)
 	}
 	// a pass that was right two times in three is still right, and the score is no higher

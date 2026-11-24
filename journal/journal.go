@@ -592,10 +592,16 @@ func MendTail(path string) error {
 	if last[0] == '\n' {
 		return nil
 	}
-	if _, err := f.WriteAt([]byte{'\n'}, st.Size()); err != nil {
+	// appended, not written at the size read: another writer may have added to the file since
+	a, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
 		return err
 	}
-	return f.Sync()
+	defer a.Close()
+	if _, err := a.Write([]byte{'\n'}); err != nil {
+		return err
+	}
+	return a.Sync()
 }
 
 // AppendLine appends one line to a file of lines, made if it's missing: the last line mended

@@ -124,7 +124,7 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 	for turn := 1; turn <= turns && ctx.Err() == nil; turn++ {
 		start := time.Now()
 		reply, usage, err := tb.ChatTools(ctx, msgs, offered)
-		if err != nil && offered != nil && ctx.Err() == nil {
+		if err != nil && offered != nil && ctx.Err() == nil && !brain.IsDown(err) {
 			// a request with tools failed: once more with them, since a malformed tool call is
 			// often bad luck in the sampling; then the task carries on with programs only, the
 			// conversation so far as plain text, so the model still gets to the answer. A model
@@ -134,7 +134,7 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 			j.Event(run, "model.retry", map[string]any{"turn": turn})
 			reply, more, err = tb.ChatTools(ctx, msgs, offered)
 			usage = addUsage(usage, more)
-			if err != nil && ctx.Err() == nil {
+			if err != nil && ctx.Err() == nil && !brain.IsDown(err) {
 				offered, r.NoTools, msgs = nil, true, plain(msgs)
 				j.Event(run, "model.notools", map[string]any{"turn": turn})
 				reply, more, err = tb.ChatTools(ctx, msgs, nil)

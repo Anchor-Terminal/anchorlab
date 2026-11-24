@@ -257,7 +257,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	}
 	res.Path = path(res)
 	if res.Failed != "" && !gave {
-		j.Event(run, "eval.failed", map[string]any{"task": t.ID, "failed": res.Failed})
+		j.Event(run, "question.failed", map[string]any{"task": t.ID, "failed": res.Failed})
 	}
 
 	calls := sess.Calls()
@@ -304,7 +304,8 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	res.About = t.about(looked)
 	mu.Unlock()
 
-	if res.Failed != "" && !gave {
+	if res.Failed != "" && !gave && !res.Forbidden {
+		// a call to a ruled-out tool stays wrong whatever failed after it
 		res.Status = StatusFailed
 	} else {
 		res.Status = grade(ctx, t, src, before, errBefore, answer, gave, res)
@@ -476,6 +477,13 @@ func (o Options) runProgram(ctx context.Context, run, at, code string, sess *gat
 		return sess.CallTool(ctx, tool, args)
 	}
 	res, err := cell.Run(ctx, conn, code, o.JobTimeout, call)
+	if errors.Is(err, cell.ErrProgram) {
+		// the program broke the cell's rules: the model's doing, told to it like a build error
+		r.Builds++
+		r.BuildFails++
+		j.Event(run, "program.refused", map[string]any{"at": at})
+		return "The cell refused the program: " + strings.TrimPrefix(err.Error(), cell.ErrProgram.Error()+": ") + ".\n", true
+	}
 	if err != nil {
 		j.Event(run, "cell.failed", map[string]any{"at": at})
 		if ctx.Err() == nil {

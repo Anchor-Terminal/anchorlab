@@ -27,7 +27,8 @@ func TestNearMisses(t *testing.T) {
 	}{
 		{Text, 0, Answer{Value: "AA"}, []string{"AA", "aa", "**AA**", "`AA`.", "\"AA\""}, []string{"A", "AAA", "AA+", "A A", "not AA", ""}},
 		{Slug, 0, Answer{Value: "openai-api", Also: []string{"OpenAI API"}}, []string{"openai-api", "OpenAI API", "`openai-api`"}, []string{"openai", "openai-api-2", "anthropic-api", "openai-api, anthropic-api"}},
-		{Int, 0, Answer{Value: "12"}, []string{"12", "12 tools", "$12", "12.0", "about 12"}, []string{"11", "13", "1/2", "12-15", "1 2", "6+6", "120", "1.2", ""}},
+		{Int, 0, Answer{Value: "12"}, []string{"12", "12 tools", "$12", "12.0", "about 12"}, []string{"11", "13", "1/2", "12-15", "1 2", "6+6", "120", "1.2", "", "gpt-12", "top-12", "v12", "12k", "12½", "12 million"}},
+		{Number, 0.05, Answer{Value: "-3"}, []string{"-3", "−3", "-3.0 points"}, []string{"3", "+3", "top-3", "gpt-3", "-3k"}},
 		{Number, 0.05, Answer{Value: "8.40"}, []string{"8.4", "$8.40", "8.42", "8.4 per million", "USD 8.40"}, []string{"8.5", "84", "8/4", "8.4-9", "8.4 or 9", "0.84"}},
 		{Numbers, 0.05, Answer{Value: "1, 2.5"}, []string{"1, 2.5", "1,2.5", "$1; $2.50"}, []string{"2.5, 1", "1", "1, 2.5, 3", "1/1, 2.5"}},
 		{Date, 0, Answer{Value: "2026-11-05"}, []string{"2026-11-05", "2026-11-05T10:00:00Z", "on 2026-11-05"}, []string{"2026-11-06", "2026-05-11", "5 November 2026", "20261105"}},
@@ -55,14 +56,16 @@ func TestNearMisses(t *testing.T) {
 // version, and one that can is a new version of the set (Version, HardVersion) and a Rescore for
 // the saved scores. gBench forces the same decision with a fingerprint of its scoring code.
 var scoringFingerprints = map[string]string{
-	Version: "d9913c1e0a70f155",
+	Version: "c246ce5d8ac5c7ca",
 }
 
 // scoringCode is the functions and variables whose change can change a grade.
 var scoringCode = map[string][]string{
-	"check.go": {"Correct", "number", "norm", "dateIn", "items", "FindAnswer", "noneWords", "numberToken", "joiners", "isoDate", "answerLine"},
-	"eval.go":  {"grade", "verified", "skipOr", "Points", "MaxFailed"},
-	"tasks.go": {"about", "absent"},
+	"check.go":          {"Correct", "number", "lastRune", "scaled", "norm", "dateIn", "items", "FindAnswer", "noneWords", "numberToken", "joiners", "isoDate", "answerLine"},
+	"eval.go":           {"grade", "verified", "skipOr", "Points", "MaxFailed", "RunTask", "Fold", "tally", "Run"},
+	"tasks.go":          {"about", "absent"},
+	"either.go":         {"converseEither"},
+	"../brain/brain.go": {"IsDown", "down", "refusedByModel"},
 }
 
 func TestScoringFingerprint(t *testing.T) {
@@ -111,6 +114,12 @@ func TestScoringFingerprint(t *testing.T) {
 			if !found[n] {
 				t.Errorf("%s has no %s: say here what decides a grade now", file, n)
 			}
+		}
+	}
+	// the questions themselves, with what each is about and what covers it, and the hard set's
+	for _, set := range []Set{Normal(), Hard()} {
+		for _, t := range set.Tasks {
+			fmt.Fprintf(h, "%s %s %d %d %v %v %v %v %v %v\n", set.Version, t.ID, t.Level, t.Kind, t.Tol, t.NoCall, t.FromList, t.NotFoundCounts, t.About, t.Covers)
 		}
 	}
 	got := fmt.Sprintf("%x", h.Sum(nil))[:16]

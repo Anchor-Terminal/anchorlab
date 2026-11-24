@@ -200,16 +200,16 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	case s.Unreachable*2 > s.Runs*s.Tasks:
 		cp.Finish()
 		return s, errors.New("the site or its MCP server didn't answer most of the tasks; no score kept")
-	case s.Scored == 0:
-		// nothing had a right answer to hold an answer against: a score of 0 would say the model
-		// got everything wrong, so there's none (gBench withholds an empty score the same way)
-		cp.Finish()
-		return s, errors.New("no question could be scored (the site moved under every one, or none was asked); no score kept")
 	case s.Failed > eval.MaxFailed(s.Runs, s.Tasks):
 		// the questions that went through are kept and the failed ones weren't written down, so
 		// the next evaluation of this model asks only those
 		cp.Stop(time.Since(began))
 		return s, fmt.Errorf("the model's server or the box failed under %d questions, more than the %d a score may leave out; no score kept, and the next run asks those again (journalctl -u llama-server, -u anchor-lab-cell.socket)", s.Failed, eval.MaxFailed(s.Runs, s.Tasks))
+	case s.Scored == 0:
+		// nothing had a right answer to hold an answer against: a score of 0 would say the model
+		// got everything wrong, so there's none (gBench withholds an empty score the same way)
+		cp.Finish()
+		return s, errors.New("no question could be scored (the site moved under every one, or none was asked); no score kept")
 	}
 	if err := eval.Save(state, s); err != nil {
 		cp.Stop(time.Since(began)) // the questions are still good: try again from them

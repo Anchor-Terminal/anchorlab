@@ -901,7 +901,8 @@ func progress(state string, t time.Time) *Progress {
 				}
 				p.Pass, p.Passes, p.Question, p.Of, p.LastEvent = e.Pass, e.Passes, e.N, e.Of, e.T.UTC()
 			case "eval.end":
-				if p == nil || e.Run == "" {
+				if p == nil || e.Run == "" || e.Status == "failed" {
+					// a question the box failed under is asked again, and counted when that ends
 					continue
 				}
 				p.Done++
@@ -913,9 +914,7 @@ func progress(state string, t time.Time) *Progress {
 					p.Wrong++
 				case "skipped":
 					p.Skipped++
-				case "unreachable", "failed":
-					// a question the box failed under isn't counted either: the site's admin page
-					// shows both as the questions left out
+				case "unreachable":
 					p.Unreachable++
 				}
 			}

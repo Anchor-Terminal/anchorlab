@@ -95,8 +95,10 @@ ldconfig
 llama-server --list-devices    # Vulkan0: AMD Radeon ... with about 100 GB
 ```
 
-To update later: `./deploy.sh -llama` from the anchorlab clone, with the llama.cpp checkout's path
-as `LLAMA_CPP` in `private/settings.env`. It pulls and builds llama.cpp as you, installs the build
+To update later: `./deploy.sh -llama` from the anchorlab clone. It uses the checkout named by
+`LLAMA_CPP` in `private/settings.env`; when that's empty it looks for the one these steps made (a
+clone of llama.cpp up to three folders down from home, beside the anchorlab clone, or in `/opt`,
+`/srv` or `/usr/local/src`), or clones one to `~/llama.cpp`, and writes the path there. It pulls and builds llama.cpp as you, installs the build
 (`models/install.sh -llama`, as root) and restarts llama-server if the version changed, with the lab
 paused around it. By hand: `git pull`, the two `cmake --build` and `--install` lines again, and
 `systemctl restart llama-server`.

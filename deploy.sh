@@ -3,7 +3,8 @@
 #
 #   ./deploy.sh            pull, build, install, and the lab goes on
 #   ./deploy.sh -llama     the same, with llama.cpp pulled and rebuilt in its checkout first
-#                          (LLAMA_CPP in private/settings.env)
+#                          (LLAMA_CPP in private/settings.env; when it's empty the checkout is
+#                          looked for, or cloned to ~/llama.cpp, and the path written there)
 #   ./deploy.sh -no-pull   build and install what's checked out, without pulling
 #
 # Run it as yourself from the box's clone of this repository, the first time too. It builds in the
@@ -47,6 +48,35 @@ asgroup() {
     else
         return 2
     fi
+}
+
+# find_llama prints the llama.cpp checkouts on this machine, one a line: folders called llama.cpp
+# that are git clones of it, in the usual places and up to three folders down from home.
+find_llama() {
+    local d
+    {
+        find "$HOME" -maxdepth 3 -type d -name llama.cpp 2>/dev/null
+        find "$(dirname "$PWD")" /opt /srv /usr/local/src -maxdepth 2 -type d -name llama.cpp 2>/dev/null
+    } | sort -u | while read -r d; do
+        if [ -d "$d/.git" ] && git -C "$d" remote get-url origin 2>/dev/null | grep -q 'llama\.cpp'; then echo "$d"; fi
+    done
+    return 0
+}
+
+# remember sets one setting in private/settings.env, so the next deploy and models/install.sh,
+# which reads the file as root, find it without being told: the line replaced if it's there,
+# added if not, and the file made from nothing if there isn't one.
+remember() {
+    local k="$1" v="$2" f=private/settings.env
+    if [ -f "$f" ] && grep -q "^$k=" "$f"; then
+        local tmp; tmp="$(mktemp "$f.XXXXXX")"
+        awk -v k="$k" -v v="$v" 'index($0, k"=") == 1 { print k"="v; next } { print }' "$f" > "$tmp"
+        chmod --reference="$f" "$tmp" && mv "$tmp" "$f"
+    else
+        [ -f "$f" ] || { install -m 0600 /dev/null "$f"; echo "# our own settings (private/README.md)" > "$f"; }
+        printf '%s=%s\n' "$k" "$v" >> "$f"
+    fi
+    note "written to $f: $k=$v"
 }
 
 main() {
@@ -103,7 +133,28 @@ main() {
     # 3. llama.cpp, built as you in its checkout; models/install.sh -llama installs it below
     if [ "$llama" = 1 ]; then
         say "llama.cpp"
-        [ -n "${LLAMA_CPP:-}" ] && [ -d "$LLAMA_CPP/.git" ] || die "-llama: LLAMA_CPP in private/settings.env names no llama.cpp checkout"
+        if [ -z "${LLAMA_CPP:-}" ]; then
+            # the checkout MODELS.md's steps made, wherever they were run; one, or a new clone
+            local found; found="$(find_llama)"
+            case "$(printf '%s' "$found" | grep -c . || true)" in
+                0)
+                    LLAMA_CPP="$HOME/llama.cpp"
+                    [ ! -e "$LLAMA_CPP" ] || die "-llama: no llama.cpp checkout found, and $LLAMA_CPP is there but isn't one; set LLAMA_CPP in private/settings.env"
+                    note "no llama.cpp checkout found, so a new one goes in $LLAMA_CPP"
+                    git clone --quiet --depth 1 https://github.com/ggml-org/llama.cpp "$LLAMA_CPP"
+                    ;;
+                1)
+                    LLAMA_CPP="$found"
+                    note "found the checkout in $LLAMA_CPP"
+                    ;;
+                *)
+                    die "-llama: more than one llama.cpp checkout ($(echo $found)); set LLAMA_CPP in private/settings.env to the one llama-server was built from"
+                    ;;
+            esac
+            remember LLAMA_CPP "$LLAMA_CPP"
+        fi
+        [ -d "$LLAMA_CPP/.git" ] || die "-llama: LLAMA_CPP=$LLAMA_CPP in private/settings.env isn't a llama.cpp checkout"
+        [ -w "$LLAMA_CPP/.git" ] || die "-llama: $LLAMA_CPP isn't yours to pull into (made with sudo?); sudo chown -R $(id -un): $LLAMA_CPP, then again"
         git -C "$LLAMA_CPP" pull --ff-only --quiet
         note "at $(git -C "$LLAMA_CPP" log -1 --format='%h %s')"
         [ -d "$LLAMA_CPP/build" ] || cmake -S "$LLAMA_CPP" -B "$LLAMA_CPP/build" -DGGML_VULKAN=ON -DCMAKE_BUILD_TYPE=Release >/dev/null

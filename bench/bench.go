@@ -139,6 +139,11 @@ type Score struct {
 	Flaky   []string       `json:"flaky,omitempty"`   // callable cases that answered in some passes and not others
 	PerCase map[string]int `json:"perCase,omitempty"` // how many passes each callable case answered in
 
+	// Ready and Server are what the checks before the run found and what the model's server said
+	// about itself, as on an evaluation's score (eval.Score)
+	Ready  string `json:"ready,omitempty"`
+	Server string `json:"server,omitempty"`
+
 	firstOK map[string]int // the attempt each case first answered on in this pass, 0 for never
 }
 

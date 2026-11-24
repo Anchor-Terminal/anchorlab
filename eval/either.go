@@ -162,6 +162,7 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 		}
 		calls := reply.ToolCalls
 		j.Artifact(run, fmt.Sprintf("model-%d.txt", turn), []byte(replyText(reply)))
+		r.noteHealth(j, run, turn, replyHealth(reply.Content, reply.Reasoning, len(calls)))
 		if len(calls) == 0 {
 			if a, ok := FindAnswer(reply.Content); ok {
 				return a, true
@@ -295,7 +296,7 @@ func path(r TaskResult) string {
 }
 
 func addUsage(a, b brain.Usage) brain.Usage {
-	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens, Trimmed: max(a.Trimmed, b.Trimmed), Cut: b.Cut}
+	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens, Trimmed: max(a.Trimmed, b.Trimmed), Cut: b.Cut, Reasoning: b.Reasoning}
 }
 
 // programName is a tool's name as a program calls it: lab_fetch is lab.fetch there.

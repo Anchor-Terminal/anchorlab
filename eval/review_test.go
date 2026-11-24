@@ -403,3 +403,20 @@ func TestRescore3(t *testing.T) {
 		t.Error("versions")
 	}
 }
+
+// A stopped evaluation carries on only when it's asked the same way: one stopped under other
+// limits starts over, so a score isn't made of passes asked two ways.
+func TestResumeOnlyAskedTheSameWay(t *testing.T) {
+	state, start := t.TempDir(), time.Now()
+	cp, _, _ := OpenCheckpointSet(state, Normal(), "m", ModeEither, 3, start, "turns=32 calls=200")
+	cp.Record(1, TaskResult{ID: "a", Status: StatusCorrect})
+	cp.Stop(time.Minute)
+	if _, why, _ := OpenCheckpointSet(state, Normal(), "m", ModeEither, 3, start, "turns=32 calls=200"); why != "resumed" {
+		t.Errorf("the same setup: %s", why)
+	}
+	if c, why, _ := OpenCheckpointSet(state, Normal(), "m", ModeEither, 3, start, "turns=48 calls=200"); !strings.HasPrefix(why, "started over: asked differently") {
+		t.Errorf("other limits: %s", why)
+	} else if _, done := c.Has(1, "a"); done {
+		t.Error("a question asked under the old limits was kept")
+	}
+}

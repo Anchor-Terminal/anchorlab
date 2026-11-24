@@ -57,3 +57,20 @@ func TestPresetNames(t *testing.T) {
 		}
 	}
 }
+
+// A model's preset sampling reads as /props names it, and its file's hash is the first in the list.
+func TestSamplingAndFile(t *testing.T) {
+	s, ok := Sampling("muse-glimmer-30b")
+	if !ok || s["temperature"] != 1.0 || s["top_p"] != 0.95 || s["top_k"] != 64 || len(s) != 3 {
+		t.Errorf("muse-glimmer-30b: %v %v", s, ok)
+	}
+	if s, ok := Sampling("lfm3-1.7b"); !ok || s["repeat_penalty"] != 1.1 || s["temperature"] != 0.1 {
+		t.Errorf("lfm3-1.7b: %v", s)
+	}
+	if _, ok := Sampling("no-such-model"); ok {
+		t.Error("a model with no section")
+	}
+	if f := File("qwen3.5-122b-a10b"); f != "690a72066b02b108ac46e196f5359beb20214da31b1d647549e73163b2106658" {
+		t.Errorf("file: %s", f)
+	}
+}

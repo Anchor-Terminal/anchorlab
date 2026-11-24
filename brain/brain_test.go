@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -359,5 +360,35 @@ func TestDown(t *testing.T) {
 	cancel()
 	if _, _, err := c.Chat(ctx, []Message{{Role: "user", Content: "hi"}}); err == nil || IsDown(err) {
 		t.Errorf("stopped: %v", err)
+	}
+}
+
+// /props gives the context, the sampling the server uses when a request sets none, the chat
+// template and the server's build; a reply's split-off thinking comes back apart from its text,
+// and is never sent back to the model.
+func TestPropsAndReasoning(t *testing.T) {
+	var sent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/props" {
+			w.Write([]byte(`{"default_generation_settings":{"n_ctx":65536,"params":{"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0,"seed":-1}},"chat_template":"<|im_start|>","build_info":"b12611-abc"}`))
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		sent = string(b)
+		w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ANSWER: 4","reasoning_content":"2+2 is 4"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":9}}`))
+	}))
+	defer srv.Close()
+	c := &Client{URL: srv.URL + "/v1", Model: "qwen", MaxTokens: 100, Timeout: 5 * time.Second}
+	p, err := c.Props(context.Background())
+	if err != nil || p.Context != 65536 || p.Template != "<|im_start|>" || p.Build != "b12611-abc" ||
+		p.Sampling["temperature"] != 0.6 || p.Sampling["top_k"] != 20 || len(p.Sampling) != 4 {
+		t.Errorf("%v %+v", err, p)
+	}
+	m, u, err := c.ChatTools(context.Background(), []Message{{Role: "user", Content: "2+2?"}, {Role: "assistant", Content: "x", Reasoning: "secret"}}, nil)
+	if err != nil || m.Content != "ANSWER: 4" || m.Reasoning != "2+2 is 4" || u.Reasoning != "2+2 is 4" {
+		t.Errorf("%v %+v %+v", err, m, u)
+	}
+	if strings.Contains(sent, "secret") || strings.Contains(sent, "reasoning") {
+		t.Errorf("thinking sent back: %s", sent)
 	}
 }

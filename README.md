@@ -393,11 +393,27 @@ anchor-lab eval -rescore                  # what the last version's scores becom
 ```
 
 An evaluation stopped by a restart or an install isn't lost: each question is kept as it finishes,
-and the next start carries on from the one that was in flight.
+and the next start carries on from the one that was in flight, when it's asked the same way (the
+same limits and settings); one stopped under others starts over.
+
+Before the first question, an evaluation or a bench checks the box and the model, and stops at the
+first check that fails: disk free, the state writable, the site answering, a cell running a program,
+the model loading, the sampling its server uses against `models/presets.ini`, and seven readiness
+questions (package `golden`). The readiness questions are a tool call, a tool call with arguments,
+exact JSON, a conversation of several turns and a tool's answer read back, the last two each with a
+twin asked in one plain message, so a broken chat template is told apart from a weak model. A broken
+template stops the run; a weak model is scored, with what it missed on the score (`ready`). The
+server's build, the model file and the sampling it used are on the score too (`server`).
+
+```
+anchor-lab preflight                      # the box only
+anchor-lab preflight -model qwen3.8-27b   # and the model: every check, printed, nothing kept
+```
 
 `anchor-lab why -model qwen3.8-27b` says how a model lost the questions it lost in its latest
 evaluation, from the evaluation's journal: out of replies, cut off at the token limit, no answer, a
-tool it was told to leave alone, no lookup behind the answer (or none about the thing asked), or a
+tool it was told to leave alone, an empty reply, a reply that went round in circles, the answer
+left in its thinking, no lookup behind the answer (or none about the thing asked), or a
 wrong answer, with the replies, calls, fetches and builds
 each one took. It prints numbers and words from a fixed list, so it's safe to paste anywhere.
 
@@ -411,7 +427,9 @@ Each score also records the time: seconds a question on average, output tokens a
 model's time, and each task's own time, beside the Lab score rather than in it. It records how the
 model was asked (`setup`: the mode, the replies, calls and fetches a question gets, the reply budget,
 temperature and context), the replies that stopped at the token limit (`truncated`) and the
-questions the box failed under (`failed`). `-compare` prints each share right with a 95% range, the
+questions the box failed under (`failed`), replies that went wrong as replies (`health`: empty,
+looped, the answer left in the thinking), what each pass alone would have scored (`passPoints`), and
+`measure: replies-cut` when more than one reply in ten hit the token limit. `-compare` prints each share right with a 95% range, the
 luck of that many questions, and says when the scores weren't asked the same way; `-flips` ends with
 a sign test on the questions two models disagree on. A reply may take `-model-timeout` or its whole
 token budget at 5 tokens a second, whichever is longer. A score's headline is the Lab score, 0 to 100: the tasks right, a level 2 task counting twice and a

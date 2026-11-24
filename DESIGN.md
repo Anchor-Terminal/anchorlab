@@ -582,11 +582,46 @@ small, they use the standard library only, and they treat everything above as da
     both count as an error in the result format, so `errors` and `toolsOk` read the same and only
     the gateway's word changed. Every file of lines is synced and mended before an append.
 
-  Not taken, for now: the chat-template probe gBench runs before a model is scored (a pair of
-  prompts that tells a broken template from a weak model), a preflight table before a long run,
-  checking the sampling the model's server really used against the presets, and not publishing
-  a P95 from fewer than 20 calls, which would change what `p95Ms` means in the result format. The
-  first two are the next to do; the readiness check (`readyModel`) is where they'd go.
+  Then, the same night, "yeah do all of them" of the rest, and of gBench's three tiers, "Golden
+  Set smoke tets should be good and 2 agentic quality suite is what we are tetsing for! so they
+  should be good to port":
+  - *Readiness questions before a model is scored* (package `golden`, `anchor-lab-golden/1`). Seven
+    questions with one right answer each, in gBench's Golden Set's design and written for the lab:
+    a tool call, a tool call with arguments, exact JSON, a conversation of several turns and a
+    tool's answer read back. The last two come in pairs: the same thing asked in one plain user
+    message (the twin), which a template can't get wrong without everything failing. Twin right
+    and pair wrong is the chat template broken, not the model weak. A reply holding the
+    template's own tokens (read out of `/props`' `chat_template`, so it covers any family) fails
+    too. A broken template holds the run back, after asking a second time (at the publishers'
+    temperatures one wrong answer can be chance), since the score would measure the template; a
+    weak model is scored like any other, and what it got wrong is written on the score (`ready`).
+  - *A preflight before a run* (`cmd/anchor-lab/preflight.go`): disk free, the state writable, the
+    site and its MCP server answering, a cell building and running a program, the model loading,
+    its sampling and the readiness questions, in that order, stopping at the first that fails.
+    An evaluation and a bench run it; `anchor-lab preflight [-model x]` prints every line.
+  - *The sampling the server really uses is checked against the preset.* `/props` gives the
+    sampling llama.cpp uses when a request sets none; it's compared with `models/presets.ini`
+    (leaving out the temperature when `-temperature` is given), and written on the score with the
+    server's build and the first 12 characters of the model file's SHA-256 (`server`). A
+    difference is warned about and written down, not stopped on: a preset changed on purpose is
+    the operator's call.
+  - *A stopped evaluation carries on only when it's asked the same way.* The checkpoint keeps the
+    setup, and one stopped under other limits starts over ("asked differently"), so a score is
+    never passes asked two ways.
+  - *Reply health.* Each reply is classified apart from its grade: empty, looped (a line of 40
+    characters or more five times, or the last 200 characters four times, in a reply of 800 or
+    more), or the answer left in the thinking (an ANSWER line in `reasoning_content` and none in
+    the reply). They're counted on the question and the score (`health`), and `anchor-lab why`
+    gives them as the reason a question was lost.
+  - *What each pass alone would have scored* (`passPoints`) and the share right over every pass
+    (`avgPct`), since the majority over passes hides how much one pass's luck moves a score.
+  - *A score that measured the limit says so.* More than one reply in ten cut off at the token
+    limit puts `replies-cut` in `measure`.
+
+  None of this changes a grade (the fingerprint moved, for the score's new fields, with the set's
+  version kept). Still to do: not publishing a P95 from fewer than 20 calls, which changes what
+  `p95Ms` means in the result format and so is a new version with the site's side in the same
+  pull request; and the agentic quality suite, which is a set of its own.
 - **What the lab is doing shows where Vlad looks.** Vlad, 18 November 2026, of the admin page's Lab
   tab: "i should see what it's doing on the lab page, that's where i wanted it". The stats carry
   the evaluation in progress (which question of which pass, how many right, wrong and skipped so

@@ -27,6 +27,9 @@ type Message struct {
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
 	// ToolCallID is the call a tool message answers
 	ToolCallID string `json:"tool_call_id,omitempty"`
+	// Reasoning is what the server split off as the reply's thinking (reasoning_content). Read
+	// from a reply and never sent back, since chat templates differ on whether they take it.
+	Reasoning string `json:"-"`
 }
 
 // ToolCall is one call a reply asks for: Arguments is the JSON object the model wrote, as text.
@@ -63,6 +66,9 @@ type Usage struct {
 	// still thinking when its budget ran out, which reads like one that said nothing useful.
 	// gBench classifies every reply this way, so a cut-off reply isn't taken for a weak one.
 	Cut bool `json:"-"`
+	// Reasoning is the reply's thinking as the server split it off, for a caller that has only
+	// the reply's text (Chat): to see whether an answer was left in it
+	Reasoning string `json:"-"`
 }
 
 // Client calls POST <URL>/chat/completions.
@@ -96,41 +102,69 @@ const AssumedContext = 65536
 // that has no such page, or whose answer has no context in it, gets 0 and no error. An error is
 // a server that can't be reached or that couldn't load the model.
 func (c *Client) Loaded(ctx context.Context) (int, error) {
+	p, err := c.Props(ctx)
+	return p.Context, err
+}
+
+// Props is what llama.cpp's server says about a model it has loaded: the context it gave it, the
+// sampling it uses when a request sets none, its chat template and its own build. Each is zero
+// when the server doesn't say.
+type Props struct {
+	Context  int
+	Sampling map[string]float64 // temperature, top_p, top_k, min_p, repeat_penalty, presence_penalty
+	Template string             // the chat template, as the server has it
+	Build    string             // the server's build, such as b12611-abc1234
+}
+
+// Props asks the model's server about the model (GET /props), which loads it if it wasn't.
+func (c *Client) Props(ctx context.Context) (Props, error) {
 	if err := Local(c.URL); err != nil {
-		return 0, fmt.Errorf("the model's address: %w", err)
+		return Props{}, fmt.Errorf("the model's address: %w", err)
 	}
 	root := strings.TrimSuffix(strings.TrimRight(c.URL, "/"), "/v1")
 	ctx, cancel := context.WithTimeout(ctx, c.Timeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, "GET", root+"/props?model="+url.QueryEscape(c.Model), nil)
 	if err != nil {
-		return 0, err
+		return Props{}, err
 	}
 	resp, err := (&http.Client{Transport: &http.Transport{Proxy: nil}}).Do(req)
 	if err != nil {
-		return 0, err
+		return Props{}, err
 	}
 	defer resp.Body.Close()
-	raw, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return 0, err
+		return Props{}, err
 	}
 	switch resp.StatusCode {
 	case http.StatusOK:
 	case http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented:
-		return 0, nil // not llama.cpp's server: nothing to ask
+		return Props{}, nil // not llama.cpp's server: nothing to ask
 	default:
-		return 0, fmt.Errorf("the model's server answered HTTP %d when asked to load %s: %.300s", resp.StatusCode, c.Model, raw)
+		return Props{}, fmt.Errorf("the model's server answered HTTP %d when asked to load %s: %.300s", resp.StatusCode, c.Model, raw)
 	}
 	var out struct {
 		Settings struct {
-			Context int `json:"n_ctx"`
+			Context int            `json:"n_ctx"`
+			Params  map[string]any `json:"params"`
 		} `json:"default_generation_settings"`
+		Template string `json:"chat_template"`
+		Build    string `json:"build_info"`
 	}
-	if json.Unmarshal(raw, &out) != nil || out.Settings.Context < 0 {
-		return 0, nil
+	if json.Unmarshal(raw, &out) != nil {
+		return Props{}, nil
 	}
-	return out.Settings.Context, nil
+	p := Props{Context: max(out.Settings.Context, 0), Template: out.Template, Build: out.Build}
+	for _, k := range []string{"temperature", "top_p", "top_k", "min_p", "repeat_penalty", "presence_penalty"} {
+		if v, ok := out.Settings.Params[k].(float64); ok {
+			if p.Sampling == nil {
+				p.Sampling = map[string]float64{}
+			}
+			p.Sampling[k] = v
+		}
+	}
+	return p, nil
 }
 
 // Window is the context the client works within, in tokens, and whether the model's server said
@@ -293,11 +327,23 @@ func (c *Client) send(ctx context.Context, msgs []Message, tools []Tool) (Messag
 		} `json:"choices"`
 		Usage Usage `json:"usage"`
 	}
+	var thought struct {
+		Choices []struct {
+			Message struct {
+				Reasoning string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	json.Unmarshal(raw, &thought)
 	if err := json.Unmarshal(raw, &out); err != nil || len(out.Choices) == 0 {
 		return Message{}, Usage{}, resp.StatusCode, &Down{Status: resp.StatusCode, Err: errors.New("the model's answer isn't a chat completion")}
 	}
 	m := out.Choices[0].Message
 	m.Role = "assistant"
+	if len(thought.Choices) > 0 {
+		m.Reasoning = thought.Choices[0].Message.Reasoning
+		out.Usage.Reasoning = m.Reasoning
+	}
 	out.Usage.Cut = out.Choices[0].FinishReason == "length"
 	return m, out.Usage, resp.StatusCode, nil
 }

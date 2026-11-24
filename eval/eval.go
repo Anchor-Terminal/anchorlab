@@ -75,6 +75,9 @@ type Options struct {
 	MaxTokens   int
 	Temperature string // "" for the model server's own
 	Context     int    // the most of the model's context the harness uses
+	// Ready and Server are written on the score as they are (Score.Ready, Score.Server): what the
+	// checks before the run found, and what the model's server said about itself
+	Ready, Server string
 }
 
 // Statuses of one task in one pass.
@@ -140,6 +143,21 @@ type TaskResult struct {
 	// Truncated is the replies that stopped at the token limit (brain.Usage.Cut). Not a grade:
 	// it says why a question was lost, a model thinking past its budget rather than a weak one.
 	Truncated int `json:"truncated,omitempty"`
+	// Health is the replies that went wrong in a way of their own, by word (replyHealth): empty,
+	// looped, or with the answer left in the thinking. Not a grade either.
+	Health map[string]int `json:"health,omitempty"`
+}
+
+// noteHealth counts what was wrong with a reply, if anything, and says so in the events.
+func (r *TaskResult) noteHealth(j *journal.Journal, run string, turn int, word string) {
+	if word == "" {
+		return
+	}
+	if r.Health == nil {
+		r.Health = map[string]int{}
+	}
+	r.Health[word]++
+	j.Event(run, "model.health", map[string]any{"turn": turn, "health": word})
 }
 
 func (o *Options) tasks() []Task {
@@ -314,7 +332,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	j.Artifact(run, "answer.txt", []byte(answer+"\n"))
 	j.Event(run, "eval.end", map[string]any{"task": t.ID, "status": res.Status, "turns": res.Turns, "calls": res.Calls, "fetches": res.Fetches,
 		"maxTurns": o.MaxTurns, "builds": res.Builds, "buildFails": res.BuildFails, "repairs": res.Repairs, "lookups": res.Lookups, "forbidden": res.Forbidden,
-		"asked": res.Asked, "about": res.About, "tried": res.Tried, "truncated": res.Truncated,
+		"asked": res.Asked, "about": res.About, "tried": res.Tried, "truncated": res.Truncated, "health": res.Health,
 		"modelMs": res.ModelMs, "cellMs": res.CellMs, "wallMs": res.WallMs, "promptTokens": res.PromptTokens, "outputTokens": res.OutputTokens})
 	return res
 }
@@ -432,6 +450,7 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 			return "", false
 		}
 		j.Artifact(run, fmt.Sprintf("model-%d.txt", turn), []byte(text))
+		r.noteHealth(j, run, turn, replyHealth(text, usage.Reasoning, 0))
 		if a, ok := FindAnswer(text); ok {
 			return a, true
 		}
@@ -692,9 +711,20 @@ type Score struct {
 	// score. A run with more than a few of them isn't kept (MaxFailed).
 	Failed int `json:"failed,omitempty"`
 	// Truncated is the replies, over every pass, that stopped at the token limit
-	Truncated int               `json:"truncated,omitempty"`
-	Cut       map[string]int    `json:"cut,omitempty"` // every pass: calls to each MCP tool whose answer came back cut short
-	PerTask   map[string][2]int `json:"perTask"`       // passes right, passes scored
+	Truncated int `json:"truncated,omitempty"`
+	// Health is the replies, over every pass, that went wrong in a way of their own (replyHealth)
+	Health map[string]int `json:"health,omitempty"`
+	// PassPoints is the Lab score each pass would have had alone, in order: the spread is how
+	// much one pass's luck moves a score, which the majority over passes hides. AvgPct is the
+	// share right over every pass scored, each pass counting, beside Pct's majority.
+	PassPoints []int   `json:"passPoints,omitempty"`
+	AvgPct     float64 `json:"avgPct,omitempty"`
+	// Measure is "" when the run measured the model, or what makes it doubtful: "replies-cut" when
+	// more than one reply in ten stopped at the token limit, which is the budget being measured
+	// as much as the model (gBench calls such a run completed with errors)
+	Measure string            `json:"measure,omitempty"`
+	Cut     map[string]int    `json:"cut,omitempty"` // every pass: calls to each MCP tool whose answer came back cut short
+	PerTask map[string][2]int `json:"perTask"`       // passes right, passes scored
 	// Time is part of the benchmark beside the Lab score, not inside it: a separate number, so a
 	// fast model that's wrong and a slow one that's right aren't mixed into one figure.
 	SecPerTask float64          `json:"secPerTask"`       // a question on average, start to grade, over the tasks that ran
@@ -725,6 +755,12 @@ type Score struct {
 	// says so (gBench keeps a hash of how a model was asked on every result, and compares only
 	// within one). Empty on a score from before it was written down.
 	Setup string `json:"setup,omitempty"`
+	// Ready is what the checks before the run found (package golden): "golden/1 7/7", or which of
+	// them failed and what that says about the chat template. Server is what the model's server
+	// said about itself: its build, the file that ran and the sampling it used when a request set
+	// none. Neither is part of the score; both say what it was made with.
+	Ready  string `json:"ready,omitempty"`
+	Server string `json:"server,omitempty"`
 }
 
 // ModeOf is a score's mode, code for one from before modes.
@@ -781,6 +817,10 @@ func Run(ctx context.Context, o Options) []TaskResult {
 }
 
 // setup is Score.Setup for these options.
+// Setup is how an evaluation with these options asks the model, in fixed words: the score's
+// Setup, and what a checkpoint must match to be carried on.
+func (o Options) Setup() string { return o.setup() }
+
 func (o Options) setup() string {
 	temp := o.Temperature
 	if temp == "" {
@@ -830,7 +870,7 @@ func RunN(ctx context.Context, o Options, n int) Score {
 		s.Mode = ModeCode
 	}
 	s.WallMs = s.Ended.Sub(started).Milliseconds()
-	s.Setup = o.setup()
+	s.Setup, s.Ready, s.Server = o.setup(), o.Ready, o.Server
 	if c := o.Resume; c != nil && !c.Started.IsZero() {
 		// a score continued after a stop starts when the evaluation first did, and its time is
 		// the time it ran, not the time it waited
@@ -867,6 +907,12 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			s.Fetches += r.Fetches
 			s.Native += r.Native
 			s.Truncated += r.Truncated
+			for w, n := range r.Health {
+				if s.Health == nil {
+					s.Health = map[string]int{}
+				}
+				s.Health[w] += n
+			}
 			if r.NoTools {
 				s.NoTools++
 			}
@@ -921,6 +967,36 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			s.TaskMs = map[string]int64{}
 		}
 		s.TaskMs[id] = w / taskRan[id]
+	}
+	// what each pass would have scored alone, and the share right counting every pass
+	right, scored := 0, 0
+	for _, p := range passes {
+		var by, of [4]int
+		for _, r := range p {
+			if r.Level < 1 || r.Level > 3 {
+				continue
+			}
+			switch r.Status {
+			case StatusCorrect:
+				by[r.Level]++
+				of[r.Level]++
+				right++
+				scored++
+			case StatusWrong, StatusNoAnswer:
+				of[r.Level]++
+				scored++
+			}
+		}
+		if n > 1 {
+			s.PassPoints = append(s.PassPoints, Points(by, of))
+		}
+	}
+	if scored > 0 && n > 1 {
+		s.AvgPct = float64(int(1000*float64(right)/float64(scored)+0.5)) / 10
+	}
+	// more than one reply in ten cut off at the token limit measures the budget as much as the model
+	if s.Turns > 0 && s.Truncated*10 > s.Turns {
+		s.Measure = "replies-cut"
 	}
 	if n > 0 {
 		s.CellMs /= int64(n)

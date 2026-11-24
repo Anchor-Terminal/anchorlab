@@ -124,6 +124,18 @@ func evalCmd(args []string) error {
 		s.Forbidden, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
 	fmt.Printf("  time: %.0f s a question on average, %.1f output tokens a second, %.1f min in all\n", s.SecPerTask, s.OutputTPS, float64(s.WallMs)/60000)
 	fmt.Printf("  setup: %s\n", s.Setup)
+	if s.Ready != "" || s.Server != "" {
+		fmt.Printf("  before it: %s; the server: %s\n", s.Ready, s.Server)
+	}
+	if len(s.PassPoints) > 1 {
+		fmt.Printf("  each pass: %v points, %.1f%% right on average\n", s.PassPoints, s.AvgPct)
+	}
+	if len(s.Health) > 0 {
+		fmt.Printf("  replies that went wrong as replies: %s\n", healthLine(s.Health))
+	}
+	if s.Measure != "" {
+		fmt.Printf("  measured: %s (more than one reply in ten hit -max-tokens; the score says as much about the limit as the model)\n", s.Measure)
+	}
 	if len(s.Wrong) > 0 {
 		fmt.Printf("  wrong: %s\n", strings.Join(s.Wrong, ", "))
 	}
@@ -169,15 +181,24 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	if err != nil {
 		return eval.Score{}, err
 	}
-	if err := readyModel(ctx, j, b, model); err != nil {
-		return eval.Score{}, err
+	// the checks before a run (preflight.go): the disk, the state, the site, a cell, the model
+	// loading, its sampling and the readiness questions, stopping at the first that fails
+	var ms modelState
+	checks := append(boxChecks(state, sock, unsafeCells), modelChecks(j, b, model, strings.TrimSpace(temperature) != "", &ms)...)
+	if _, err := preflight(ctx, checks, false); err != nil {
+		if ctx.Err() != nil {
+			return eval.Score{}, ctx.Err()
+		}
+		j.Event("", "eval.preflight", map[string]any{"model": model, "failed": firstWord(err)})
+		return eval.Score{}, fmt.Errorf("not started: %w", err)
 	}
 	o := evalOptions(j, b, model, sock, unsafeCells, mode)
+	o.Ready, o.Server = ms.Ready, ms.Server
 	o.Set = set
 	o.Hold = func(ctx context.Context) { hold(ctx, j, state) }
 	o.MaxTokens, o.Temperature, o.Context = maxTokens, strings.TrimSpace(temperature), maxContext()
 	began := time.Now()
-	cp, why, err := eval.OpenCheckpointSet(state, set, model, mode, runs, began)
+	cp, why, err := eval.OpenCheckpointSet(state, set, model, mode, runs, began, o.Setup())
 	if err != nil {
 		return eval.Score{}, fmt.Errorf("the evaluation's checkpoint: %w", err)
 	}
@@ -354,6 +375,12 @@ func evalCompare(state string, set eval.Set) error {
 			s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3], s.Runs, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.SecPerTask, s.OutputTPS, s.Ended.Format("2006-01-02 15:04"))
 		if s.Failed > 0 || s.Truncated > 0 {
 			fmt.Printf("%-28s %d questions left out because the box failed under them, %d replies cut off at the token limit\n", "", s.Failed, s.Truncated)
+		}
+		if len(s.Health) > 0 || s.Measure != "" {
+			fmt.Printf("%-28s replies: %s %s\n", "", healthLine(s.Health), s.Measure)
+		}
+		if strings.ContainsAny(s.Ready, ":;") { // a readiness question failed, or the template
+			fmt.Printf("%-28s before it: %s\n", "", s.Ready)
 		}
 	}
 	setups := map[string]int{}
@@ -623,4 +650,13 @@ func evalGrade(set eval.Set, paths, befores string) error {
 		fmt.Printf("  right in some passes only: %s\n", strings.Join(s.Flaky, ", "))
 	}
 	return nil
+}
+
+// healthLine is a score's reply health in words: "2 empty, 1 looped".
+func healthLine(h map[string]int) string {
+	var parts []string
+	for _, k := range sortedKeys(h) {
+		parts = append(parts, fmt.Sprintf("%d %s", h[k], k))
+	}
+	return strings.Join(parts, ", ")
 }

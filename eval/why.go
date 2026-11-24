@@ -26,9 +26,11 @@ type Lost struct {
 
 // The ways a question is lost, as Why says them.
 const (
-	WhyOutOfReplies = "out of replies"             // no answer, and it had used every reply it gets
-	WhyNoAnswer     = "no answer"                  // no answer with replies to spare: the model stopped or failed
-	WhyTruncated    = "cut off at the token limit" // no answer, and a reply stopped at the most it may write
+	WhyOutOfReplies = "out of replies"                    // no answer, and it had used every reply it gets
+	WhyNoAnswer     = "no answer"                         // no answer with replies to spare: the model stopped or failed
+	WhyTruncated    = "cut off at the token limit"        // no answer, and a reply stopped at the most it may write
+	WhyUnsaid       = "the answer stayed in its thinking" // no answer, and one in a reply's thinking
+	WhyLooped       = "went round in circles"             // no answer, and a reply that repeated itself
 	WhyForbidden    = "called a tool it was told to leave alone"
 	WhyNoLookup     = "no lookup behind the answer"
 	WhyWrong        = "wrong answer"
@@ -50,26 +52,27 @@ type WhyReport struct {
 }
 
 type whyEvent struct {
-	Ev         string `json:"ev"`
-	Run        string `json:"run"`
-	Task       string `json:"task"`
-	Level      int    `json:"level"`
-	Model      string `json:"model"`
-	Set        string `json:"set"`
-	Pass       int    `json:"pass"`
-	N          int    `json:"n"`
-	Status     string `json:"status"`
-	Turns      int    `json:"turns"`
-	MaxTurns   int    `json:"maxTurns"`
-	Calls      int    `json:"calls"`
-	Fetches    int    `json:"fetches"`
-	Builds     int    `json:"builds"`
-	BuildFails int    `json:"buildFails"`
-	Repairs    int    `json:"repairs"`
-	Lookups    *int   `json:"lookups"`
-	Forbidden  bool   `json:"forbidden"`
-	Truncated  int    `json:"truncated"`
-	About      *int   `json:"about"`
+	Ev         string         `json:"ev"`
+	Run        string         `json:"run"`
+	Task       string         `json:"task"`
+	Level      int            `json:"level"`
+	Model      string         `json:"model"`
+	Set        string         `json:"set"`
+	Pass       int            `json:"pass"`
+	N          int            `json:"n"`
+	Status     string         `json:"status"`
+	Turns      int            `json:"turns"`
+	MaxTurns   int            `json:"maxTurns"`
+	Calls      int            `json:"calls"`
+	Fetches    int            `json:"fetches"`
+	Builds     int            `json:"builds"`
+	BuildFails int            `json:"buildFails"`
+	Repairs    int            `json:"repairs"`
+	Lookups    *int           `json:"lookups"`
+	Forbidden  bool           `json:"forbidden"`
+	Truncated  int            `json:"truncated"`
+	About      *int           `json:"about"`
+	Health     map[string]int `json:"health"`
 }
 
 // hasAbout says whether a task, of either set, names what it's about (Task.About).
@@ -158,8 +161,13 @@ func Why(dir, model string) (WhyReport, error) {
 			if limit := e.MaxTurns; limit > 0 && e.Turns >= limit || limit == 0 && e.Turns >= 16 {
 				l.Why = WhyOutOfReplies
 			}
-			if e.Truncated > 0 {
+			switch {
+			case e.Health[HealthUnsaid] > 0:
+				l.Why = WhyUnsaid // it had the answer and didn't write it where it counts
+			case e.Truncated > 0:
 				l.Why = WhyTruncated // a reply that ran out of tokens is the likelier cause
+			case e.Health[HealthLooped] > 0:
+				l.Why = WhyLooped
 			}
 		default:
 			l.Why = WhyWrong

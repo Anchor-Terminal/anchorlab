@@ -39,6 +39,7 @@ import (
 	"github.com/Anchor-Terminal/anchorlab/cell"
 	"github.com/Anchor-Terminal/anchorlab/eval"
 	"github.com/Anchor-Terminal/anchorlab/gateway"
+	"github.com/Anchor-Terminal/anchorlab/golden"
 	"github.com/Anchor-Terminal/anchorlab/journal"
 	"github.com/Anchor-Terminal/anchorlab/seal"
 	"github.com/Anchor-Terminal/anchorlab/stats"
@@ -49,7 +50,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | cell | sync | stats | status | model | targets | retest | api | boxkey | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | preflight | cell | sync | stats | status | model | targets | retest | api | boxkey | version")
 		os.Exit(2)
 	}
 	var err error
@@ -83,8 +84,10 @@ func main() {
 		err = boxKeyCmd(args, os.Stdout)
 	case "why":
 		err = whyCmd(args, os.Stdout)
+	case "preflight":
+		err = preflightCmd(args, os.Stdout)
 	case "version":
-		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version, "hard", eval.HardVersion)
+		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version, "hard", eval.HardVersion, "golden", golden.Version)
 	default:
 		err = fmt.Errorf("no command %q", cmd)
 	}
@@ -523,14 +526,21 @@ func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelUR
 	if err != nil {
 		return bench.Score{}, err
 	}
-	if err := readyModel(ctx, j, b, model); err != nil {
-		return bench.Score{}, err
+	var ms modelState
+	checks := append(boxChecks(state, sock, unsafeCells)[:2], modelChecks(j, b, model, strings.TrimSpace(temperature) != "", &ms)...)
+	if _, err := preflight(ctx, checks, false); err != nil {
+		if ctx.Err() != nil {
+			return bench.Score{}, ctx.Err()
+		}
+		j.Event("", "bench.preflight", map[string]any{"model": model, "failed": firstWord(err)})
+		return bench.Score{}, fmt.Errorf("not started: %w", err)
 	}
 	lim := gateway.DefaultLimits
 	lim.MinInterval = 0 // the servers are in this process
 	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 16, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells), Hold: func(ctx context.Context) { hold(ctx, j, state) }}
 	s := bench.RunN(ctx, o, runs)
+	s.Ready, s.Server = ms.Ready, ms.Server
 	if ctx.Err() != nil {
 		return s, errors.New("stopped before the end; no score kept")
 	}

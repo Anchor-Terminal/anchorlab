@@ -35,7 +35,8 @@ import (
 //     lookup; one that names it on a line that never ran passes too, which can only keep a score
 //     as high as it was.
 //   - A right pass of a task whose answer is a number stands only if the answer, kept in the
-//     run's folder, is one number that reads the same as it did under the old reading.
+//     run's folder, is one number that reads the same as it did under the old reading, and a
+//     right NONE only if the answer still says the thing isn't there ("unknown" doesn't).
 //
 // Everything else in a score stands, and a pass the journal has no run for stays as it was.
 
@@ -217,6 +218,8 @@ func Rescore3(dir string, set Set, old Score) (Regrade, error) {
 				now = StatusWrong
 			case was == StatusCorrect && len(t.About) > 0 && !lookedAbout(dir, old.Model, id, run, t):
 				now = StatusWrong
+			case was == StatusCorrect && t.Kind == None && !stillNone(dir, old.Model, id, run):
+				now = StatusWrong // "unknown" was a NONE before this version
 			case was == StatusCorrect && (t.Kind == Number || t.Kind == Int || t.Kind == Numbers) && !sameNumber(dir, old.Model, id, run, t.Kind):
 				now = StatusWrong
 			}
@@ -319,6 +322,13 @@ func sameNumber(dir, model, task, run string, k Kind) bool {
 		}
 	}
 	return true
+}
+
+// stillNone says whether a run's answer, kept in its folder, says the thing isn't there by this
+// version's words. With nothing to read it again from, it stands.
+func stillNone(dir, model, task, run string) bool {
+	b, err := os.ReadFile(filepath.Join(dir, journal.Folder(model, "anchor-lab-eval", task, run), "answer.txt"))
+	return err != nil || Correct(None, 0, Answer{Value: "NONE"}, string(b))
 }
 
 var oldNonDigit = regexp.MustCompile(`[^0-9eE+\-.]`)

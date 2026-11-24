@@ -123,6 +123,7 @@ func evalCmd(args []string) error {
 		s.Model, set.Version, s.ModeOf(), s.Runs, s.Points, s.Correct, s.Scored, s.Pct, s.Steady, s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3],
 		s.Forbidden, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
 	fmt.Printf("  time: %.0f s a question on average, %.1f output tokens a second, %.1f min in all\n", s.SecPerTask, s.OutputTPS, float64(s.WallMs)/60000)
+	fmt.Printf("  setup: %s\n", s.Setup)
 	if len(s.Wrong) > 0 {
 		fmt.Printf("  wrong: %s\n", strings.Join(s.Wrong, ", "))
 	}
@@ -174,6 +175,7 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	o := evalOptions(j, b, model, sock, unsafeCells, mode)
 	o.Set = set
 	o.Hold = func(ctx context.Context) { hold(ctx, j, state) }
+	o.MaxTokens, o.Temperature, o.Context = maxTokens, strings.TrimSpace(temperature), maxContext()
 	began := time.Now()
 	cp, why, err := eval.OpenCheckpointSet(state, set, model, mode, runs, began)
 	if err != nil {
@@ -198,6 +200,11 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	case s.Unreachable*2 > s.Runs*s.Tasks:
 		cp.Finish()
 		return s, errors.New("the site or its MCP server didn't answer most of the tasks; no score kept")
+	case s.Scored == 0:
+		// nothing had a right answer to hold an answer against: a score of 0 would say the model
+		// got everything wrong, so there's none (gBench withholds an empty score the same way)
+		cp.Finish()
+		return s, errors.New("no question could be scored (the site moved under every one, or none was asked); no score kept")
 	case s.Failed > eval.MaxFailed(s.Runs, s.Tasks):
 		// the questions that went through are kept and the failed ones weren't written down, so
 		// the next evaluation of this model asks only those
@@ -340,13 +347,31 @@ func evalCompare(state string, set eval.Set) error {
 	if set.Version != eval.Version {
 		fmt.Printf("the %s set (%s): scored apart from the Lab score, and not ranked\n", set.Name, set.Version)
 	}
-	fmt.Printf("%-28s %-6s %5s %7s %6s %6s %8s %8s %8s %5s %10s %9s %7s %6s  %s\n", "model", "mode", "score", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "s/q", "tok/s", "when")
+	fmt.Printf("%-28s %-6s %5s %7s %6s %11s %6s %8s %8s %8s %5s %10s %9s %7s %6s  %s\n", "model", "mode", "score", "right", "%", "95% range", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "s/q", "tok/s", "when")
 	for _, s := range scores {
-		fmt.Printf("%-28.28s %-6s %5d %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f %7.0f %6.1f  %s\n", s.Model, s.ModeOf(), s.Points, s.Correct, s.Scored, s.Pct, s.Steady,
+		lo, hi := eval.Wilson(s.Correct, s.Scored)
+		fmt.Printf("%-28.28s %-6s %5d %3d/%-3d %6.1f %5.0f-%-5.0f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f %7.0f %6.1f  %s\n", s.Model, s.ModeOf(), s.Points, s.Correct, s.Scored, s.Pct, lo, hi, s.Steady,
 			s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3], s.Runs, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.SecPerTask, s.OutputTPS, s.Ended.Format("2006-01-02 15:04"))
+		if s.Failed > 0 || s.Truncated > 0 {
+			fmt.Printf("%-28s %d questions left out because the box failed under them, %d replies cut off at the token limit\n", "", s.Failed, s.Truncated)
+		}
+	}
+	setups := map[string]int{}
+	for _, s := range scores {
+		setups[s.Setup]++
+	}
+	if len(setups) > 1 {
+		fmt.Println("\nnot all of these were asked the same way:")
+		for setup, n := range setups {
+			if setup == "" {
+				setup = "(from before the setup was written down)"
+			}
+			fmt.Printf("  %d with %s\n", n, setup)
+		}
 	}
 	if len(scores) > 1 {
-		fmt.Println("which tasks two of them disagree on: anchor-lab eval -flips <model>,<model>")
+		fmt.Println("95% range: where the share right could be with the luck of this many questions (Wilson). Two models whose ranges overlap may not differ;")
+		fmt.Println("which tasks two of them disagree on, and whether that's luck: anchor-lab eval -flips <model>,<model>")
 	}
 	return nil
 }
@@ -374,8 +399,20 @@ func evalFlips(state string, set eval.Set, pair, mode string) error {
 	}
 	fl := eval.FlipsIn(set.Tasks, sa, sb)
 	fmt.Printf("%s %d/%d right, %s %d/%d; %d tasks differ\n", a, sa.Correct, sa.Scored, b, sb.Correct, sb.Scored, len(fl))
+	aOnly := 0
 	for _, f := range fl {
+		if 2*f.A[0] > f.A[1] {
+			aOnly++
+		}
 		fmt.Printf("  %-36s %s %d/%d   %s %d/%d\n", f.Task, a, f.A[0], f.A[1], b, f.B[0], f.B[1])
+	}
+	if len(fl) > 0 {
+		p := eval.SignTest(aOnly, len(fl)-aOnly)
+		verdict := "within luck of each other at this many questions"
+		if p < 0.05 {
+			verdict = "unlikely to be luck"
+		}
+		fmt.Printf("%s right where %s isn't: %d; the other way: %d. Sign test on those, two-sided: p = %.3f, %s\n", a, b, aOnly, len(fl)-aOnly, p, verdict)
 	}
 	return nil
 }

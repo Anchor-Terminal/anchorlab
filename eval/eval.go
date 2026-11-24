@@ -69,6 +69,12 @@ type Options struct {
 	Mode string
 	// RetryWait is how long a failed question waits before it's asked again: RetryWait when zero
 	RetryWait time.Duration
+	// Setup is what shaped the run beyond the model and the questions, written on the score
+	// (Score.Setup): the model's server settings the harness chose. The rest of it (the replies,
+	// calls and fetches a question gets, the mode) the harness knows from the other options.
+	MaxTokens   int
+	Temperature string // "" for the model server's own
+	Context     int    // the most of the model's context the harness uses
 }
 
 // Statuses of one task in one pass.
@@ -131,6 +137,9 @@ type TaskResult struct {
 	// Tried is the calls to a tool the task says to leave alone that the gateway refused, and so
 	// never sent: Forbidden counts them as well, since the model asked
 	Tried int `json:"tried,omitempty"`
+	// Truncated is the replies that stopped at the token limit (brain.Usage.Cut). Not a grade:
+	// it says why a question was lost, a model thinking past its budget rather than a weak one.
+	Truncated int `json:"truncated,omitempty"`
 }
 
 func (o *Options) tasks() []Task {
@@ -304,7 +313,7 @@ func RunTask(ctx context.Context, o Options, t Task) TaskResult {
 	j.Artifact(run, "answer.txt", []byte(answer+"\n"))
 	j.Event(run, "eval.end", map[string]any{"task": t.ID, "status": res.Status, "turns": res.Turns, "calls": res.Calls, "fetches": res.Fetches,
 		"maxTurns": o.MaxTurns, "builds": res.Builds, "buildFails": res.BuildFails, "repairs": res.Repairs, "lookups": res.Lookups, "forbidden": res.Forbidden,
-		"asked": res.Asked, "about": res.About, "tried": res.Tried,
+		"asked": res.Asked, "about": res.About, "tried": res.Tried, "truncated": res.Truncated,
 		"modelMs": res.ModelMs, "cellMs": res.CellMs, "wallMs": res.WallMs, "promptTokens": res.PromptTokens, "outputTokens": res.OutputTokens})
 	return res
 }
@@ -409,6 +418,10 @@ func (o Options) converse(ctx context.Context, run string, t Task, sess *gateway
 		r.OutputTokens += usage.OutputTokens
 		if usage.Trimmed > 0 {
 			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
+		}
+		if usage.Cut {
+			r.Truncated++
+			j.Event(run, "model.cut", map[string]any{"turn": turn, "outputTokens": usage.OutputTokens})
 		}
 		if err != nil {
 			j.Event(run, "model.failed", map[string]any{"turn": turn, "down": brain.IsDown(err)})
@@ -669,9 +682,11 @@ type Score struct {
 	// Failed is the questions, over every pass, the box failed under before the model could
 	// answer (StatusFailed): not scored, and counted here so availability can be read beside the
 	// score. A run with more than a few of them isn't kept (MaxFailed).
-	Failed  int               `json:"failed,omitempty"`
-	Cut     map[string]int    `json:"cut,omitempty"` // every pass: calls to each MCP tool whose answer came back cut short
-	PerTask map[string][2]int `json:"perTask"`       // passes right, passes scored
+	Failed int `json:"failed,omitempty"`
+	// Truncated is the replies, over every pass, that stopped at the token limit
+	Truncated int               `json:"truncated,omitempty"`
+	Cut       map[string]int    `json:"cut,omitempty"` // every pass: calls to each MCP tool whose answer came back cut short
+	PerTask   map[string][2]int `json:"perTask"`       // passes right, passes scored
 	// Time is part of the benchmark beside the Lab score, not inside it: a separate number, so a
 	// fast model that's wrong and a slow one that's right aren't mixed into one figure.
 	SecPerTask float64          `json:"secPerTask"`       // a question on average, start to grade, over the tasks that ran
@@ -695,6 +710,13 @@ type Score struct {
 	// From is the version a score was first graded under, when it's a run of an older version
 	// graded again from its journal and not run again (Rescore). Empty on a score made by a run.
 	From string `json:"from,omitempty"`
+	// Setup is what shaped the run beside the model and the questions: the replies, calls and
+	// fetches a question got, the most the model could write in a reply, its temperature and the
+	// context the harness used, as "turns=32 calls=200 ...". Two scores with different setups
+	// weren't asked the same way, and the lab's limits have changed over time, so a comparison
+	// says so (gBench keeps a hash of how a model was asked on every result, and compares only
+	// within one). Empty on a score from before it was written down.
+	Setup string `json:"setup,omitempty"`
 }
 
 // ModeOf is a score's mode, code for one from before modes.
@@ -750,6 +772,16 @@ func Run(ctx context.Context, o Options) []TaskResult {
 	return out
 }
 
+// setup is Score.Setup for these options.
+func (o Options) setup() string {
+	temp := o.Temperature
+	if temp == "" {
+		temp = "server"
+	}
+	return fmt.Sprintf("mode=%s turns=%d calls=%d fetches=%d tokens=%d temperature=%s context=%d job=%s",
+		map[bool]string{true: o.Mode, false: ModeCode}[o.Mode != ""], o.MaxTurns, o.Limits.MaxCalls, o.Limits.MaxCalls, o.MaxTokens, temp, o.Context, o.JobTimeout)
+}
+
 // RetryWait is how long a question the box failed under waits before it's asked again.
 const RetryWait = 20 * time.Second
 
@@ -790,6 +822,7 @@ func RunN(ctx context.Context, o Options, n int) Score {
 		s.Mode = ModeCode
 	}
 	s.WallMs = s.Ended.Sub(started).Milliseconds()
+	s.Setup = o.setup()
 	if c := o.Resume; c != nil && !c.Started.IsZero() {
 		// a score continued after a stop starts when the evaluation first did, and its time is
 		// the time it ran, not the time it waited
@@ -825,6 +858,7 @@ func Fold(tasks []Task, passes [][]TaskResult) Score {
 			s.Calls += r.Calls
 			s.Fetches += r.Fetches
 			s.Native += r.Native
+			s.Truncated += r.Truncated
 			if r.NoTools {
 				s.NoTools++
 			}

@@ -328,7 +328,7 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 	if err := brain.Local(url); err != nil {
 		return nil, fmt.Errorf("-model-url: %w (the prompts hold strangers' text and stay on this machine)", err)
 	}
-	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait, MaxContext: maxContext()}
+	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: replyTimeout(wait, maxTokens), MaxContext: maxContext()}
 	if temperature = strings.TrimSpace(temperature); temperature != "" {
 		t, err := strconv.ParseFloat(temperature, 64)
 		if err != nil || t < 0 || t > 2 {
@@ -337,6 +337,19 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 		c.Temperature = &t
 	}
 	return c, nil
+}
+
+// slowestTPS is the slowest a model on the box writes, in tokens a second: the dense models run at
+// about 7.6 (DESIGN.md, "Numbers"), and this leaves room under that.
+const slowestTPS = 5
+
+// replyTimeout is how long one reply may take: -model-timeout, or long enough for a reply of
+// maxTokens at the slowest a model on the box writes, with two minutes for reading the prompt,
+// whichever is longer. A fixed 15 minutes cut off a dense model's longest replies part way and
+// the question was scored as no answer; gBench scales its server's timeout with the model for
+// the same reason. A reply cut off by this is the harness's, not the model's (brain.Down).
+func replyTimeout(wait time.Duration, maxTokens int) time.Duration {
+	return max(wait, time.Duration(maxTokens/slowestTPS)*time.Second+2*time.Minute)
 }
 
 // maxContext is the most of a model's context the lab uses, in tokens: ANCHOR_LAB_CONTEXT when

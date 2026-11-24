@@ -396,8 +396,9 @@ An evaluation stopped by a restart or an install isn't lost: each question is ke
 and the next start carries on from the one that was in flight.
 
 `anchor-lab why -model qwen3.8-27b` says how a model lost the questions it lost in its latest
-evaluation, from the evaluation's journal: out of replies, no answer, a tool it was told to leave
-alone, no lookup behind the answer, or a wrong answer, with the replies, calls, fetches and builds
+evaluation, from the evaluation's journal: out of replies, cut off at the token limit, no answer, a
+tool it was told to leave alone, no lookup behind the answer (or none about the thing asked), or a
+wrong answer, with the replies, calls, fetches and builds
 each one took. It prints numbers and words from a fixed list, so it's safe to paste anywhere.
 
 The tasks are in `eval/tasks.go`, public: level 1 is one lookup, level 2 a few lookups or a
@@ -407,7 +408,13 @@ alone). The rest are worked out from the site's public API when the task runs, s
 as the listings change and a model can't learn them.
 
 Each score also records the time: seconds a question on average, output tokens a second of the
-model's time, and each task's own time, beside the Lab score rather than in it. A score's headline is the Lab score, 0 to 100: the tasks right, a level 2 task counting twice and a
+model's time, and each task's own time, beside the Lab score rather than in it. It records how the
+model was asked (`setup`: the mode, the replies, calls and fetches a question gets, the reply budget,
+temperature and context), the replies that stopped at the token limit (`truncated`) and the
+questions the box failed under (`failed`). `-compare` prints each share right with a 95% range, the
+luck of that many questions, and says when the scores weren't asked the same way; `-flips` ends with
+a sign test on the questions two models disagree on. A reply may take `-model-timeout` or its whole
+token budget at 5 tokens a second, whichever is longer. A score's headline is the Lab score, 0 to 100: the tasks right, a level 2 task counting twice and a
 level 3 task three times, out of the tasks scored weighted the same way. A score counts a task right
 when it's right in more than half the passes it was scored in. An answer
 is checked against the site as it was when the task started and as it is when the model answered,

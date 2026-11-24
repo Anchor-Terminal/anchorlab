@@ -59,6 +59,10 @@ type Usage struct {
 	// Trimmed is the characters of older tool output and programs left out of what was sent, so
 	// the conversation fitted the model's context (Client.Context)
 	Trimmed int `json:"-"`
+	// Cut is a reply that stopped because it reached MaxTokens (finish_reason "length"): a model
+	// still thinking when its budget ran out, which reads like one that said nothing useful.
+	// gBench classifies every reply this way, so a cut-off reply isn't taken for a weak one.
+	Cut bool `json:"-"`
 }
 
 // Client calls POST <URL>/chat/completions.
@@ -284,7 +288,8 @@ func (c *Client) send(ctx context.Context, msgs []Message, tools []Tool) (Messag
 	}
 	var out struct {
 		Choices []struct {
-			Message Message `json:"message"`
+			Message      Message `json:"message"`
+			FinishReason string  `json:"finish_reason"`
 		} `json:"choices"`
 		Usage Usage `json:"usage"`
 	}
@@ -293,6 +298,7 @@ func (c *Client) send(ctx context.Context, msgs []Message, tools []Tool) (Messag
 	}
 	m := out.Choices[0].Message
 	m.Role = "assistant"
+	out.Usage.Cut = out.Choices[0].FinishReason == "length"
 	return m, out.Usage, resp.StatusCode, nil
 }
 

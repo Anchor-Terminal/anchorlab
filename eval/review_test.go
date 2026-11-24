@@ -314,8 +314,8 @@ func TestCheckpointCutShortTwice(t *testing.T) {
 
 // A score of anchor-lab-eval/2 is graded again from its run by the new rules: a pass whose
 // model server failed leaves the score, a right pass that asked for a ruled-out tool (refused or
-// not), whose run never named the thing a trap asks about, or whose number answer was two numbers
-// becomes wrong. Everything else stands.
+// not), whose run never named the thing a trap asks about, whose number answer was two numbers or
+// whose NONE was "unknown" becomes wrong. Everything else stands.
 func TestRescore3(t *testing.T) {
 	state := t.TempDir()
 	dir := filepath.Join(state, "eval")
@@ -343,6 +343,9 @@ func TestRescore3(t *testing.T) {
 				j.Event(run, "call", map[string]any{"tool": "submit_review", "status": "refused"})
 			case task.ID == "none-listing" && p == 2: // a 404 about something else
 				j.Artifact(run, "code-1.go", []byte(`tool.Call("lab.fetch", map[string]any{"path": "/api/v1/tools/other.json"})`))
+			case task.ID == "none-category" && p == 0: // looked, and answered "unknown", which isn't a NONE now
+				j.Artifact(run, "model-1.txt", []byte(`[call search_tools] {"category":"teleportation"}`))
+				j.Artifact(run, "answer.txt", []byte("unknown\n"))
 			case len(task.About) > 0:
 				j.Artifact(run, "model-1.txt", []byte(`[call get_tool] {"slug":"`+task.About[0]+`"}`))
 			case task.ID == "known-grade-count" && p == 0: // two numbers, read as one
@@ -362,13 +365,13 @@ func TestRescore3(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := r.Score
-	want := map[string][2]int{"grade-anthropic-api": {2, 2}, "dont-submit": {2, 3}, "none-listing": {2, 3}, "known-grade-count": {2, 3}, "none-model": {3, 3}, "top-search": {3, 3}}
+	want := map[string][2]int{"grade-anthropic-api": {2, 2}, "dont-submit": {2, 3}, "none-listing": {2, 3}, "known-grade-count": {2, 3}, "none-category": {2, 3}, "none-model": {3, 3}, "top-search": {3, 3}}
 	for id, w := range want {
 		if s.PerTask[id] != w {
 			t.Errorf("%s: %v, want %v (was %v)", id, s.PerTask[id], w, old.PerTask[id])
 		}
 	}
-	if s.V != Version || s.From != Version2 || s.Failed != 1 || r.Unscored != 1 || r.Flips() != 4 || len(r.Disagree) != 0 || r.Missing != 0 {
+	if s.V != Version || s.From != Version2 || s.Failed != 1 || r.Unscored != 1 || r.Flips() != 5 || len(r.Disagree) != 0 || r.Missing != 0 {
 		t.Errorf("the new score: %s from %s, failed %d, flips %d, disagree %v, missing %d", s.V, s.From, s.Failed, r.Flips(), r.Disagree, r.Missing)
 	}
 	// a pass that was right two times in three is still right, and the score is no higher

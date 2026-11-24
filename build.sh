@@ -26,5 +26,10 @@ if [ -n "$cases" ]; then
 fi
 go vet "${tags[@]}" ./...
 go test -short "${tags[@]}" ./...
-go build "${tags[@]}" -trimpath -ldflags "-X main.version=$(date -u +%Y.%m.%d-%H%M)" -o anchor-lab ./cmd/anchor-lab
+# the version is when it was built and from which commit, with .dirty when the tree had changes
+# git hadn't committed: a score names the harness that made it, and a date alone doesn't say what
+# code that was (gBench writes the harness's commit and a dirty flag on every result)
+commit="$(git rev-parse --short=12 HEAD 2>/dev/null || echo nogit)"
+git diff --quiet HEAD -- 2>/dev/null || commit="$commit.dirty"
+go build "${tags[@]}" -trimpath -ldflags "-X main.version=$(date -u +%Y.%m.%d-%H%M)+$commit" -o anchor-lab ./cmd/anchor-lab
 ./anchor-lab version

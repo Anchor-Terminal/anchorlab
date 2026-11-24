@@ -76,7 +76,9 @@ func dateIn(s string) string {
 }
 
 // noneWords are the ways a model says there's no such thing.
-var noneWords = map[string]bool{"none": true, "not listed": true, "not found": true, "n/a": true, "no such listing": true, "unknown": true, "does not exist": true}
+// "unknown" isn't one, since anchor-lab-eval/3: a model that doesn't know hasn't said the thing
+// isn't there.
+var noneWords = map[string]bool{"none": true, "not listed": true, "not found": true, "n/a": true, "no such listing": true, "does not exist": true}
 
 // Correct says whether got is the right answer to a task of kind k. tol is the task's tolerance
 // for Number.

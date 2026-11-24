@@ -149,6 +149,10 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 			// the conversation was sent with its oldest output cut to fit the model's context
 			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
 		}
+		if usage.Cut {
+			r.Truncated++
+			j.Event(run, "model.cut", map[string]any{"turn": turn, "outputTokens": usage.OutputTokens})
+		}
 		if err != nil {
 			j.Event(run, "model.failed", map[string]any{"turn": turn, "down": brain.IsDown(err)})
 			if brain.IsDown(err) {
@@ -291,7 +295,7 @@ func path(r TaskResult) string {
 }
 
 func addUsage(a, b brain.Usage) brain.Usage {
-	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens, Trimmed: max(a.Trimmed, b.Trimmed)}
+	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens, Trimmed: max(a.Trimmed, b.Trimmed), Cut: b.Cut}
 }
 
 // programName is a tool's name as a program calls it: lab_fetch is lab.fetch there.

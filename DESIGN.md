@@ -528,6 +528,47 @@ small, they use the standard library only, and they treat everything above as da
   (`explore.withheld` in the events, `Result.Withheld`, which isn't part of the format), and the
   server is tested again on the next round rather than after the retest interval. One that got
   every tool to answer before the failure is written, since it's a success either way.
+- **What was taken from gBench.** Vlad, 23 November 2026, beside the review: "have a look at
+  https://github.com/google-deepmind/gbench ... try to take as many of the good things from the
+  google deepmind one". gBench (Google DeepMind's benchmark suite for open models, read at
+  `d3e4283`) is built around numbers that can be trusted and compared, and these of its habits fit
+  a harness this size:
+  - *A harness error is never scored* (the decision above), and an empty score isn't a 0: an
+    evaluation where nothing could be scored keeps no score, as gBench withholds one.
+  - *Every reply is classified.* The model's client reads `finish_reason`, and a reply that
+    stopped at the token limit is counted (`truncated` on the question and the score, `model.cut`
+    in the events). `anchor-lab why` gives "cut off at the token limit" as the reason a question
+    was lost when it was, rather than "no answer", which read as a model that gave up.
+  - *The timeout follows the budget.* A reply could be 16,384 tokens and the dense models write
+    about 7.6 a second, which is 36 minutes, against a fixed 15-minute timeout that cut the longest
+    replies off and scored them as no answer. A reply now gets `-model-timeout` or its whole
+    budget at 5 tokens a second plus two minutes, whichever is longer, and a reply cut off by it is
+    the harness's (`brain.Down`). gBench scales its server's timeout to the model the same way.
+  - *How a model was asked is written on its score* (`setup`: mode, replies, calls, fetches, the
+    reply budget, temperature, context, a program's time limit), since the limits have gone up
+    since the first scores. `eval -compare` says when the scores it lists weren't asked the same
+    way. gBench hashes this into an id and compares only within one; here it's a line to read,
+    and the site still ranks every latest score.
+  - *The harness says which code it is.* The version is when it was built and its commit, with
+    `.dirty` for uncommitted changes (`2026.11.24-0130+fd6f6d6cb4ee`), where it was a time only.
+  - *A change to the checking is a decision.* A test hashes the functions that decide a grade
+    (`eval/scoring_test.go`) and fails when they change, until someone says whether a grade can
+    move (a new version of the set) or can't (a new fingerprint). Beside it, every kind of answer
+    is tested both ways, the forms that count and near misses that mustn't, which is how gBench
+    writes its Golden Set: a presence check always says what has to be absent.
+  - *Uncertainty is said where models are compared.* `eval -compare` gives each share right a 95%
+    Wilson range, and `eval -flips` a two-sided sign test on the questions two models disagree on,
+    so "98 against 96" can be read as luck or not. gBench publishes no interval on accuracy; on 59
+    questions one is needed.
+  - *Smaller ones.* "unknown" isn't a NONE answer any more (a model that doesn't know hasn't said the
+    thing isn't there; graded again like the rest). A vendor API's 429 is the API being busy, not
+    the program's argument error to fix. Every file of lines is synced and mended before an append.
+
+  Not taken, for now: the chat-template probe gBench runs before a model is scored (a pair of
+  prompts that tells a broken template from a weak model), a preflight table before a long run,
+  checking the sampling the model's server really used against the presets, and not publishing
+  a P95 from fewer than 20 calls, which would change what `p95Ms` means in the result format. The
+  first two are the next to do; the readiness check (`readyModel`) is where they'd go.
 - **What the lab is doing shows where Vlad looks.** Vlad, 18 November 2026, of the admin page's Lab
   tab: "i should see what it's doing on the lab page, that's where i wanted it". The stats carry
   the evaluation in progress (which question of which pass, how many right, wrong and skipped so

@@ -393,7 +393,9 @@ func (s *Session) callAPI(ctx context.Context, c Call, name string, args map[str
 	case code >= 200 && code < 300:
 	case code == 401 || code == 403:
 		return fail("auth", fmt.Sprintf("HTTP %d: the API wants a key", code))
-	case code >= 500:
+	case code == 429 || code >= 500:
+		// the API is busy or broken, which no better argument would change: it isn't the
+		// program's error to fix (tool_error), and gBench counts a 429 as the server's too
 		return fail("http_error", fmt.Sprintf("HTTP %d: %s", code, clip(text, 2000)))
 	default:
 		// the API's own words, so the program can see why and try again with better parameters

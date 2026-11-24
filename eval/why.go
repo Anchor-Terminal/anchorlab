@@ -26,8 +26,9 @@ type Lost struct {
 
 // The ways a question is lost, as Why says them.
 const (
-	WhyOutOfReplies = "out of replies" // no answer, and it had used every reply it gets
-	WhyNoAnswer     = "no answer"      // no answer with replies to spare: the model stopped or failed
+	WhyOutOfReplies = "out of replies"             // no answer, and it had used every reply it gets
+	WhyNoAnswer     = "no answer"                  // no answer with replies to spare: the model stopped or failed
+	WhyTruncated    = "cut off at the token limit" // no answer, and a reply stopped at the most it may write
 	WhyForbidden    = "called a tool it was told to leave alone"
 	WhyNoLookup     = "no lookup behind the answer"
 	WhyWrong        = "wrong answer"
@@ -67,6 +68,20 @@ type whyEvent struct {
 	Repairs    int    `json:"repairs"`
 	Lookups    *int   `json:"lookups"`
 	Forbidden  bool   `json:"forbidden"`
+	Truncated  int    `json:"truncated"`
+	About      *int   `json:"about"`
+}
+
+// hasAbout says whether a task, of either set, names what it's about (Task.About).
+func hasAbout(id string) bool {
+	for _, set := range []Set{Normal(), Hard()} {
+		for _, t := range set.Tasks {
+			if t.ID == id {
+				return len(t.About) > 0
+			}
+		}
+	}
+	return false
 }
 
 // Why reads the journal in dir (<state>/eval) for a model's latest evaluation. A question asked
@@ -143,6 +158,9 @@ func Why(dir, model string) (WhyReport, error) {
 			if limit := e.MaxTurns; limit > 0 && e.Turns >= limit || limit == 0 && e.Turns >= 16 {
 				l.Why = WhyOutOfReplies
 			}
+			if e.Truncated > 0 {
+				l.Why = WhyTruncated // a reply that ran out of tokens is the likelier cause
+			}
 		default:
 			l.Why = WhyWrong
 			switch {
@@ -150,6 +168,8 @@ func Why(dir, model string) (WhyReport, error) {
 				l.Why = WhyForbidden
 			case e.Lookups != nil && *e.Lookups == 0, e.Lookups == nil && e.Calls+e.Fetches == 0:
 				l.Why = WhyNoLookup
+			case e.About != nil && *e.About == 0 && hasAbout(e.Task):
+				l.Why = WhyNoLookup // it looked, but at something other than the thing asked
 			}
 		}
 		rep.Reasons[l.Why]++

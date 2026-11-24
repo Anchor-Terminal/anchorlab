@@ -142,7 +142,7 @@ func changePolicy(t Tool) (bool, string) {
 type Call struct {
 	Tool string
 	// ok | tool_error | rpc_error | http_error | auth (401 or 403: the server wants a key) | timeout |
-	// unreachable | too_big, for calls that were sent; refused | budget | keyed for calls that weren't
+	// unreachable | too_big | incomplete (the answer broke off part way), for calls that were sent; refused | budget | keyed for calls that weren't
 	// (keyed: the server has said twice it wants a key, so the lab stops asking it this run)
 	Status string
 	HTTP   int
@@ -151,6 +151,10 @@ type Call struct {
 	Resp   int
 	DryRun bool // a change tool, called in the dry run it declares
 	Cut    bool // the answer was longer than Limits.MaxText, and the program got the first part
+	// Args is the arguments the call was asked for with, as the program sent them. They stay in
+	// memory for the harness (the evaluation reads them to tell which listing a call was about)
+	// and are never written to an event or a result: they're a model's words.
+	Args json.RawMessage
 }
 
 // Reply is what the code gets back for a call.
@@ -488,7 +492,7 @@ func (s *Session) Calls() []Call {
 // CallTool makes one tools/call for the code in the cell. It never returns an error: what went
 // wrong is in the Reply, for the code to read and try again, and in the Call, for the result.
 func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessage) Reply {
-	c := Call{Tool: name, Req: len(args)}
+	c := Call{Tool: name, Req: len(args), Args: args}
 	fail := func(status, msg string) Reply {
 		c.Status = status
 		s.record(c)
@@ -556,7 +560,7 @@ func (s *Session) CallTool(ctx context.Context, name string, args json.RawMessag
 		var es *ErrStatus
 		status := "unreachable"
 		if errors.As(err, &es) {
-			status = map[string]string{"auth": "auth", "error": "rpc_error", "unreachable": "unreachable", "refused": "refused", "timeout": "timeout", "too_big": "too_big", "http": "http_error"}[es.Status]
+			status = map[string]string{"auth": "auth", "error": "rpc_error", "unreachable": "unreachable", "refused": "refused", "timeout": "timeout", "too_big": "too_big", "http": "http_error", "incomplete": "incomplete"}[es.Status]
 		}
 		return fail(status, clip(err.Error(), 600))
 	}
@@ -703,6 +707,10 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 		}
 		return nil, meta, &ErrStatus{"unreachable", clip(err.Error(), 300)}
 	}
+	// A stream can end without its last chunk after the message is whole, and that message is
+	// still the answer: the body is read on, and broken is set for the message reader, which
+	// calls a message it can't finish incomplete rather than a protocol error.
+	broken := err != nil
 	// what the server said with an error status, cut short and made printable, so the model can read
 	// "missing API key" or "invalid parameter x" rather than a bare number
 	said := ""
@@ -723,6 +731,9 @@ func (s *Session) rpc(ctx context.Context, method string, params any) (json.RawM
 		return nil, meta, &ErrStatus{"http", fmt.Sprintf("HTTP %d%s", resp.StatusCode, said)}
 	}
 	msg, ok := findResponse(raw, resp.Header.Get("Content-Type"), id)
+	if !ok && broken {
+		return nil, meta, &ErrStatus{"incomplete", fmt.Sprintf("the answer broke off after %d bytes, before the JSON-RPC answer was whole", len(raw))}
+	}
 	if !ok {
 		return nil, meta, &ErrStatus{"error", "no JSON-RPC answer to the request in what came back"}
 	}

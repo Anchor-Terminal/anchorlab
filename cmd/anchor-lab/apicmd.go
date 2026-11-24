@@ -94,6 +94,10 @@ func apiCmd(args []string, out io.Writer) error {
 
 // printAPIResult is one result as a person reads it: how far it got, then each operation.
 func printAPIResult(out io.Writer, r journal.Result) {
+	if r.Withheld != "" {
+		fmt.Fprintf(out, "%s: the %s failed under it before every operation had answered, so it says nothing about the API; run it again\n", r.Task, r.Withheld)
+		return
+	}
 	if r.Task != "explore" {
 		fmt.Fprintf(out, "%s: %s, %d operations listed in %d ms\n", r.Task, r.Status, r.Tools, r.ListMs)
 		return

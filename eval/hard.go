@@ -13,7 +13,13 @@ import (
 // HardVersion names the hard set: questions that take more steps than the normal set's hardest,
 // kept for when the normal set stops telling models apart. A model's Lab score never comes from
 // it (DESIGN.md, "The hard set"). A change to any of its tasks is a new version.
-const HardVersion = "anchor-lab-eval-hard/1"
+//
+// 2 has the questions of 1 and the checking of anchor-lab-eval/3 (see Version). A score of 1 is
+// graded again from its run's journal (Rescore3).
+const HardVersion = "anchor-lab-eval-hard/2"
+
+// HardVersion1 is the hard set's first version.
+const HardVersion1 = "anchor-lab-eval-hard/1"
 
 // HardFile is where the hard set's scores are kept under the state folder, apart from File, so
 // nothing that reads the Lab scores ever sees one.
@@ -597,9 +603,9 @@ var hardCapabilities = []string{"web.search", "web.scrape", "web.extract", "web.
 // a page to read, and traps where the thing asked about is almost there.
 var HardTasks = []Task{
 	// ---- level 1: two lookups joined, or a trap
-	{ID: "hard-near-slug", Level: 1, Kind: None, NotFoundCounts: true, Ask: "What grade does Anchor Terminal give its listing with the slug stripe-api?",
+	{ID: "hard-near-slug", Level: 1, Kind: None, NotFoundCounts: true, About: []string{"stripe-api"}, Covers: []string{"/api/v1/rankings.json"}, Ask: "What grade does Anchor Terminal give its listing with the slug stripe-api?",
 		Want: absent(func(ctx context.Context, s *Sources) error { _, err := s.Listing(ctx, "stripe-api"); return err })},
-	{ID: "hard-wrong-provider", Level: 1, Kind: None, NotFoundCounts: true, Ask: "By Anchor Terminal's price list, what does gpt-6.2-sol cost per million input tokens on anthropic-api?",
+	{ID: "hard-wrong-provider", Level: 1, Kind: None, NotFoundCounts: true, About: []string{"anthropic-api"}, Covers: []string{"/api/v1/prices.json"}, Ask: "By Anchor Terminal's price list, what does gpt-6.2-sol cost per million input tokens on anthropic-api?",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			// the trap is that the model is real and sold elsewhere: without that it's another question
 			if _, err := s.Model(ctx, "openai-api", "gpt-6.2-sol"); err == ErrGone {
@@ -696,7 +702,7 @@ var HardTasks = []Task{
 			}
 			return Answer{Value: itoa(d)}, nil
 		}},
-	{ID: "hard-near-category", Level: 1, Kind: None, NotFoundCounts: true, Ask: "Which listing ranks first in the Anchor Terminal category whose slug is web-scraper?",
+	{ID: "hard-near-category", Level: 1, Kind: None, NotFoundCounts: true, About: []string{"web-scraper"}, Covers: []string{"/api/v1/rankings.json", "/api/v1/categories.json"}, Ask: "Which listing ranks first in the Anchor Terminal category whose slug is web-scraper?",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			r, err := s.Rankings(ctx)
 			if err != nil {
@@ -1776,7 +1782,7 @@ func init() {
 	}
 	for _, t := range HardTasks {
 		// a task's id names its folder in the journal, so the two sets never share one
-		if seen[t.ID] || t.Want == nil || t.Level < 1 || t.Level > 3 || !strings.HasPrefix(t.ID, "hard-") {
+		if seen[t.ID] || t.Want == nil || t.Level < 1 || t.Level > 3 || !strings.HasPrefix(t.ID, "hard-") || !t.wellAbout() {
 			panic(fmt.Sprintf("eval: hard task %q is malformed or repeated", t.ID))
 		}
 		seen[t.ID] = true

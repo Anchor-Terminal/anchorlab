@@ -464,6 +464,164 @@ small, they use the standard library only, and they treat everything above as da
   (`eval.rescored`). `anchor-lab eval -rescore` prints the same thing and keeps nothing, so the
   change can be read before the harness that makes it is installed. Both versions' scores stay
   in `eval.ndjson`: version 1's are the record of what was published under it.
+- **A third version: the box's failures aren't the model's, and a trap needs a look at the thing
+  asked.** A review of the harness at `fd6f6d6` on 23 November 2026, by another model with
+  fixtures of its own, found seven faults, and each was true of the code. Four were in how an
+  answer is checked, so they're `anchor-lab-eval/3` (and `anchor-lab-eval-hard/2`), graded again
+  from the journal like version 2 was (`eval.Rescore3`, `eval.CarryAll`):
+  - *A model's server that failed was the model's miss.* A request that failed ended the
+    question with no answer, which scores as wrong. Now the model's client says which failures
+    are its server's (`brain.Down`: no connection, a dropped one, a reply past the harness's own
+    timeout, 5xx, 404 for a model it doesn't have, 401, 403, 429, or a 200 that isn't a chat
+    completion) and which are the conversation's (400 and 422, after the harness has already
+    retried with less of it). gBench draws the same line for its agentic suite's requests, and
+    doesn't score its harness's errors either. A question a server or a cell failed under is
+    asked again once after 20 seconds, then is `failed`: left out of the score, counted in the
+    score's `failed`, and not written into the checkpoint, so a stop asks it again. More than one
+    question in fifty failed (gBench's line for failed requests is 2% too) and no score is kept,
+    since it would be over other questions than other models' scores, and the next run asks only
+    the failed ones. A model that got every reply and gave no answer is still no-answer, and a
+    model that called a ruled-out tool before the failure is still wrong. What the model's own
+    program did to the cell (a program over 256 KB, a tool name or a call too long for it,
+    `cell.ErrProgram`) isn't the box failing: the model is told, like a build error, and goes on.
+    An outage doesn't send either mode to its tool-free fallback, which is for a server that
+    refuses tools, so the question isn't finished in a conversation the outage changed. The event
+    for a failed question is `question.failed`; `eval.failed` stays the whole evaluation failing.
+  - *Any 404 justified a NONE.* Version 2 let a 404 count as the lookup on a NONE trap, and the
+    review fetched another listing, got its 404, answered NONE and was right. Now each trap names
+    what it's about (`Task.About`, words like `zorblax` or `gpt-7`) and the files that list every
+    candidate (`Task.Covers`, `rankings.json`, `prices.json`, `categories.json`), and only a lookup
+    whose path or arguments hold one of the words, and that was answered, or a read of a covering
+    file (by `lab.fetch`, or a tool such as `read_page` asked for its path), counts. The words are
+    the thing asked about and not what's near it: `stripe-api` and not `stripe`, whose listing is
+    real and is the trap; `anthropic-api` and not the model's id, which is listed under another
+    provider. A provider's error for the right listing doesn't, since it says nothing about
+    whether the listing is there. To tell, the gateway keeps each call's arguments in memory
+    (`gateway.Call.Args`), never in an event or a result.
+  - *A refused call to a ruled-out tool vanished.* The tally skipped calls the gateway refused
+    before it checked the task's ruled-out names, so a model that tried `submit_review` against
+    "don't call it" was right if the gateway stopped it. The model is what's graded and the
+    gateway refusing is the lab protecting the server, so an attempt counts, sent or not
+    (`TaskResult.Tried` counts the refused ones).
+  - *"1/2" was 12.* The number reader took out everything that wasn't a digit. Now an amount is
+    one number with a currency, a percent sign, commas between thousands or a unit word around
+    it, and two numbers, or two joined by a slash, an operator or a dash, isn't one. Nor is a
+    number written onto a name (`gpt-4`, `top-3`, `v2`) or with a scale or a fraction after it
+    (`16k`, `1.5 million`, `12½`), and a typographic minus is a minus.
+
+  Grading the saved runs again works from what the journal has. A no-answer pass in a run with a
+  `model.failed` or `cell.failed` event is failed (an old `model.failed` didn't say whose it was,
+  and is taken as the server's, since a refused request is retried with less of the conversation
+  first, unless that run's conversation had already been cut to fit the context, when the refusal
+  is likeliest the conversation outgrowing it and stays the model's). A score that would leave
+  out more than one question in fifty that way isn't carried, as a run now wouldn't be kept. A right pass with a call event for a ruled-out tool, of any status, is wrong. The
+  events don't keep paths or arguments, so a right pass of a trap stands only if the run's own
+  programs (`code-*.go`) or its native calls (the `[call ...]` lines of `model-*.txt`) name the
+  thing or a covering file. Not a reply's prose, which repeats the slug it was asked about whether
+  or not it looked. This can pass a program that named it on a line that never ran, never the
+  other way. A right number
+  stands only if `answer.txt` reads as one number, the same one. From now on `model.failed`
+  says `down`, and `eval.end` carries `about` and `tried`, so a later version can be graded again
+  from the events alone.
+- **The other three faults are the harness's, and change no set.** A plain API's answer that
+  broke off before its declared length was `ok`, and the half body went to the program. It's now
+  `incomplete`, with its status and byte count kept, and an MCP answer that broke off before its
+  JSON-RPC message was whole is too; the status words are the gateway's, never the result format's,
+  which counts anything not `ok` as an error. A checkpoint cut short in the middle of a line had
+  the next line written onto the end of it, and both were lost on the next start, so the question
+  after a stop was asked twice. Every file of lines the lab appends to (the checkpoint, the
+  events, `results.ndjson`, `eval.ndjson`, `bench.ndjson`) now ends a cut-short last line first
+  (`journal.MendTail`), keeping it as a line of its own so a reader that counts lines keeps its
+  place, and a checkpoint that can't be written says so. A folded bench score added its passes'
+  wall time where its own comment says it's one pass's, so a three-pass score looked three times
+  slower than a one-pass one. It's one pass's now, with the total in `allMs`, and a score folded
+  before is put right when it's read.
+- **A vendor's explore the box failed under isn't written.** The same outage counted against a
+  vendor's server: a model's server that fell over in the middle of an explore ended the run,
+  and the calls so far were written as the server's `failure` or `partial`. Now an explore the
+  model's server or a cell failed under before every tool had answered isn't written at all
+  (`explore.withheld` in the events, `Result.Withheld`, which isn't part of the format), and the
+  server is tested again on the next round rather than after the retest interval. One that got
+  every tool to answer before the failure is written, since it's a success either way. A retest
+  asked for through the inbox that's withheld goes back in the inbox for that model.
+- **What was taken from gBench.** Vlad, 23 November 2026, beside the review: "have a look at
+  https://github.com/google-deepmind/gbench ... try to take as many of the good things from the
+  google deepmind one". gBench (Google DeepMind's benchmark suite for open models, read at
+  `d3e4283`) is built around numbers that can be trusted and compared, and these of its habits fit
+  a harness this size:
+  - *A harness error is never scored* (the decision above), and an empty score isn't a 0: an
+    evaluation where nothing could be scored keeps no score, as gBench withholds one.
+  - *Every reply is classified.* The model's client reads `finish_reason`, and a reply that
+    stopped at the token limit is counted (`truncated` on the question and the score, `model.cut`
+    in the events). `anchor-lab why` gives "cut off at the token limit" as the reason a question
+    was lost when it was, rather than "no answer", which read as a model that gave up.
+  - *The timeout follows the budget.* A reply could be 16,384 tokens and the dense models write
+    about 7.6 a second, which is 36 minutes, against a fixed 15-minute timeout that cut the longest
+    replies off and scored them as no answer. A reply now gets `-model-timeout` or its whole
+    budget at 5 tokens a second plus two minutes, whichever is longer, and a reply cut off by it is
+    the harness's (`brain.Down`). gBench scales its server's timeout to the model the same way.
+  - *How a model was asked is written on its score* (`setup`: mode, replies, calls, fetches, the
+    reply budget, temperature, context, a program's time limit), since the limits have gone up
+    since the first scores. `eval -compare` says when the scores it lists weren't asked the same
+    way. gBench hashes this into an id and compares only within one; here it's a line to read,
+    and the site still ranks every latest score.
+  - *The harness says which code it is.* The version is when it was built and its commit, with
+    `.dirty` for uncommitted changes (`2026.11.24-0130+fd6f6d6cb4ee`), where it was a time only.
+  - *A change to the checking is a decision.* A test hashes the functions that decide a grade
+    (`eval/scoring_test.go`) and fails when they change, until someone says whether a grade can
+    move (a new version of the set) or can't (a new fingerprint). Beside it, every kind of answer
+    is tested both ways, the forms that count and near misses that mustn't, which is how gBench
+    writes its Golden Set: a presence check always says what has to be absent.
+  - *Uncertainty is said where models are compared.* `eval -compare` gives each share right a 95%
+    Wilson range, and `eval -flips` a two-sided sign test on the questions two models disagree on,
+    so "98 against 96" can be read as luck or not. gBench publishes no interval on accuracy; on 59
+    questions one is needed.
+  - *Smaller ones.* "unknown" isn't a NONE answer any more (a model that doesn't know hasn't said the
+    thing isn't there; graded again like the rest). A vendor API's 429 is the API being busy, not
+    the program's argument error to fix: it's `http_error` now, where it was `tool_error`, and
+    both count as an error in the result format, so `errors` and `toolsOk` read the same and only
+    the gateway's word changed. Every file of lines is synced and mended before an append.
+
+  Then, the same night, "yeah do all of them" of the rest, and of gBench's three tiers, "Golden
+  Set smoke tets should be good and 2 agentic quality suite is what we are tetsing for! so they
+  should be good to port":
+  - *Readiness questions before a model is scored* (package `golden`, `anchor-lab-golden/1`). Seven
+    questions with one right answer each, in gBench's Golden Set's design and written for the lab:
+    a tool call, a tool call with arguments, exact JSON, a conversation of several turns and a
+    tool's answer read back. The last two come in pairs: the same thing asked in one plain user
+    message (the twin), which a template can't get wrong without everything failing. Twin right
+    and pair wrong is the chat template broken, not the model weak. A reply holding the
+    template's own tokens (read out of `/props`' `chat_template`, so it covers any family) fails
+    too. A broken template holds the run back, after asking a second time (at the publishers'
+    temperatures one wrong answer can be chance), since the score would measure the template; a
+    weak model is scored like any other, and what it got wrong is written on the score (`ready`).
+  - *A preflight before a run* (`cmd/anchor-lab/preflight.go`): disk free, the state writable, the
+    site and its MCP server answering, a cell building and running a program, the model loading,
+    its sampling and the readiness questions, in that order, stopping at the first that fails.
+    An evaluation and a bench run it; `anchor-lab preflight [-model x]` prints every line.
+  - *The sampling the server really uses is checked against the preset.* `/props` gives the
+    sampling llama.cpp uses when a request sets none; it's compared with `models/presets.ini`
+    (leaving out the temperature when `-temperature` is given), and written on the score with the
+    server's build and the first 12 characters of the model file's SHA-256 (`server`). A
+    difference is warned about and written down, not stopped on: a preset changed on purpose is
+    the operator's call.
+  - *A stopped evaluation carries on only when it's asked the same way.* The checkpoint keeps the
+    setup, and one stopped under other limits starts over ("asked differently"), so a score is
+    never passes asked two ways.
+  - *Reply health.* Each reply is classified apart from its grade: empty, looped (a line of 40
+    characters or more five times, or the last 200 characters four times, in a reply of 800 or
+    more), or the answer left in the thinking (an ANSWER line in `reasoning_content` and none in
+    the reply). They're counted on the question and the score (`health`), and `anchor-lab why`
+    gives them as the reason a question was lost.
+  - *What each pass alone would have scored* (`passPoints`) and the share right over every pass
+    (`avgPct`), since the majority over passes hides how much one pass's luck moves a score.
+  - *A score that measured the limit says so.* More than one reply in ten cut off at the token
+    limit puts `replies-cut` in `measure`.
+
+  None of this changes a grade (the fingerprint moved, for the score's new fields, with the set's
+  version kept). Still to do: not publishing a P95 from fewer than 20 calls, which changes what
+  `p95Ms` means in the result format and so is a new version with the site's side in the same
+  pull request; and the agentic quality suite, which is a set of its own.
 - **What the lab is doing shows where Vlad looks.** Vlad, 18 November 2026, of the admin page's Lab
   tab: "i should see what it's doing on the lab page, that's where i wanted it". The stats carry
   the evaluation in progress (which question of which pass, how many right, wrong and skipped so
@@ -887,6 +1045,10 @@ real run, because the page should be shaped by what the results look like.
 
 ## Open
 
+- **What grading the saved runs again under version 3 changes.** `eval.Rescore3` is tested on
+  made-up journals. On the box, `anchor-lab eval -rescore` says what each model loses before the
+  harness that keeps the new scores is installed. A score can only go down or stay, apart from a
+  question the box failed under leaving it, which changes what the score is out of.
 - **What grading the eleven saved runs again changes.** `eval.Rescore` is tested on made-up
   journals, not on the box's. The four traps are level 2, so a model can gain up to 8 of the 110
   weighted points. `anchor-lab eval -rescore` on the box says what each model gains, before the

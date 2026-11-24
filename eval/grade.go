@@ -47,6 +47,22 @@ type Given struct {
 	// Asked is how many the site answered at all, a 404 or a tool's "no such listing" included
 	// (TaskResult.Asked). Left out, it's Lookups.
 	Asked int `json:"asked,omitempty"`
+	// Looked is each call and fetch made for the question, when the runner kept them. With it
+	// the grading is the harness's own: Called, Lookups and Asked are worked out from it, and a
+	// task with About counts only the lookups about its subject. Without it Called, Lookups and
+	// Asked stand as given, and Asked stands in for lookups about the subject, the weaker check
+	// the harness used before anchor-lab-eval/3.
+	Looked []GivenLookup `json:"looked,omitempty"`
+}
+
+// GivenLookup is one call or fetch made outside the harness.
+type GivenLookup struct {
+	Tool string `json:"tool"` // lab.fetch for a fetch of the site
+	// What is what it was asked for: a fetch's path, a call's arguments as JSON
+	What string `json:"what"`
+	// Answered is ok, none (it isn't there: a 404 or a 410, a tool's "no such listing"), or
+	// error for no answer at all (a timeout, a 5xx, a refusal)
+	Answered string `json:"answered"`
 }
 
 // Snapshot is the set's right answers at a moment.
@@ -116,7 +132,26 @@ func GradeGiven(ctx context.Context, tasks []Task, src *Sources, tools []gateway
 	for _, t := range tasks {
 		g, gave := by[t.ID]
 		gave = gave && g.Answer != ""
-		res := TaskResult{ID: t.ID, Level: t.Level, Lookups: g.Lookups, Asked: max(g.Asked, g.Lookups)}
+		about := 0
+		if len(g.Looked) > 0 {
+			g.Called, g.Lookups, g.Asked = nil, 0, 0
+			var looked []lookup
+			for _, l := range g.Looked {
+				g.Called = append(g.Called, l.Tool)
+				a := map[string]string{"ok": "ok", "none": "none"}[l.Answered]
+				if a == "ok" {
+					g.Lookups++
+				}
+				if a != "" {
+					g.Asked++
+				}
+				looked = append(looked, lookup{what: l.What, answered: a, fetch: l.Tool == FetchTool})
+			}
+			about = t.about(looked)
+		} else if len(t.About) > 0 {
+			about = max(g.Asked, g.Lookups) // the older check: any answer at all
+		}
+		res := TaskResult{ID: t.ID, Level: t.Level, Lookups: g.Lookups, Asked: max(g.Asked, g.Lookups), About: about}
 		no := map[string]bool{}
 		for _, n := range t.NoCall {
 			no[n] = true

@@ -209,3 +209,25 @@ func TestFoldAndFlips(t *testing.T) {
 		t.Errorf("flips %+v, want %s and %s", fl, b, c)
 	}
 }
+
+// A folded score's time is one pass's, as its other costs are, so three identical passes read
+// the same as one: the review of 23 November 2026 found the passes' total there. The total is
+// kept beside it, and a score saved before then is put right when it's read.
+func TestFoldTimePerPass(t *testing.T) {
+	pass := Score{V: Version, Model: "m", Cases: len(Cases), Runs: 1, WallMs: 1000, ModelMs: 800}
+	one := Fold([]Score{pass})
+	three := Fold([]Score{pass, pass, pass})
+	if three.WallMs != one.WallMs || three.WallMs != 1000 || three.ModelMs != 800 || three.AllMs != 3000 {
+		t.Errorf("one pass %d ms, three passes %d ms a pass (%d in all), model %d ms", one.WallMs, three.WallMs, three.AllMs, three.ModelMs)
+	}
+	state := t.TempDir()
+	old := three
+	old.AllMs, old.WallMs = 0, 3000 // as folded before AllMs
+	if err := Save(state, old); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(state)
+	if err != nil || len(got) != 1 || got[0].WallMs != 1000 || got[0].AllMs != 3000 {
+		t.Errorf("an old folded score read back: %+v, %v", got, err)
+	}
+}

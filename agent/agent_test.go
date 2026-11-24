@@ -212,3 +212,58 @@ func TestTallyKeyed(t *testing.T) {
 		t.Errorf("one worked: %+v", r)
 	}
 }
+
+// down is a model whose server is down.
+type down struct{}
+
+func (down) Chat(context.Context, []brain.Message) (string, brain.Usage, error) {
+	return "", brain.Usage{}, &brain.Down{Status: 503, Err: fmt.Errorf("the model answered HTTP 503")}
+}
+
+// An explore the model's server failed under is withheld: nothing is written for the server,
+// whose tools were never tried, since a failure there would be the lab's on the server's record.
+// A model that answered and ran out of things to try is written as before.
+func TestExploreWithheldWhenTheModelIsDown(t *testing.T) {
+	defer gateway.AllowLoopbackForTests()()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			ID     int    `json:"id"`
+			Method string `json:"method"`
+		}
+		json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("Content-Type", "application/json")
+		result := `{}`
+		switch req.Method {
+		case "initialize":
+			result = `{"protocolVersion":"2025-06-18","serverInfo":{"name":"fake"}}`
+		case "tools/list":
+			result = `{"tools":[{"name":"search","description":"Search.","annotations":{"readOnlyHint":true}}]}`
+		}
+		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%d,"result":%s}`, req.ID, result)
+	}))
+	defer srv.Close()
+	dir := t.TempDir()
+	j, err := journal.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lim := gateway.DefaultLimits
+	lim.MinInterval = 0
+	o := Options{Journal: j, Brain: down{}, Model: "m", Limits: lim, Version: "test", MaxTurns: 4, Attempts: 3, UserAgent: "anchor-lab/test"}
+	out := Run(context.Background(), o, targets.Target{Slug: "fake", URL: srv.URL})
+	if len(out) != 2 || out[0].Task != "connect" || out[1].Withheld != "model" {
+		t.Fatalf("results: %+v", out)
+	}
+	n, _ := journal.Results(dir, 0, func(int, []byte, journal.Result) {})
+	var tasks []string
+	journal.Results(dir, 0, func(_ int, _ []byte, r journal.Result) { tasks = append(tasks, r.Task) })
+	if n != 1 || len(tasks) != 1 || tasks[0] != "connect" {
+		t.Errorf("written: %d lines, %v", n, tasks)
+	}
+	// a model that says DONE at once is written: its run says something, if not much
+	o.Brain = &scripted{replies: []string{"DONE"}}
+	out = Run(context.Background(), o, targets.Target{Slug: "fake", URL: srv.URL})
+	if len(out) != 2 || out[1].Withheld != "" || out[1].Outcome != "failure" {
+		t.Errorf("a model that gave up: %+v", out[1])
+	}
+}

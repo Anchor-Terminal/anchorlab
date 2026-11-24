@@ -39,6 +39,7 @@ import (
 	"github.com/Anchor-Terminal/anchorlab/cell"
 	"github.com/Anchor-Terminal/anchorlab/eval"
 	"github.com/Anchor-Terminal/anchorlab/gateway"
+	"github.com/Anchor-Terminal/anchorlab/golden"
 	"github.com/Anchor-Terminal/anchorlab/journal"
 	"github.com/Anchor-Terminal/anchorlab/seal"
 	"github.com/Anchor-Terminal/anchorlab/stats"
@@ -49,7 +50,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | cell | sync | stats | status | model | targets | retest | api | boxkey | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | preflight | cell | sync | stats | status | model | targets | retest | api | boxkey | version")
 		os.Exit(2)
 	}
 	var err error
@@ -83,8 +84,10 @@ func main() {
 		err = boxKeyCmd(args, os.Stdout)
 	case "why":
 		err = whyCmd(args, os.Stdout)
+	case "preflight":
+		err = preflightCmd(args, os.Stdout)
 	case "version":
-		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version, "hard", eval.HardVersion)
+		fmt.Println("anchor-lab", version, "bench", bench.Version, "eval", eval.Version, "hard", eval.HardVersion, "golden", golden.Version)
 	default:
 		err = fmt.Errorf("no command %q", cmd)
 	}
@@ -229,9 +232,21 @@ func run(args []string) error {
 					journal.QueueRetest(*state, rq.Model, slugs[i:])
 					break
 				}
+				withheld := false
 				for _, r := range agent.Run(ctx, ro, t) {
+					if r.Withheld != "" {
+						fmt.Printf("%s %-8s %s (retest, %s): not written, the %s failed under it\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, rq.Model, r.Withheld)
+						withheld = true
+						continue
+					}
 					fmt.Printf("%s %-8s %s (retest, %s): %s, %s, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, rq.Model, r.Status, r.Outcome, r.Calls, r.Errors)
 					last[key(t.Slug, rq.Model)] = r.Ended
+				}
+				if withheld {
+					// the request left the inbox when it was taken: put this server back in it,
+					// since the main round only tests with the lab's own model
+					delete(last, key(t.Slug, rq.Model))
+					journal.QueueRetest(*state, rq.Model, []string{slug})
 				}
 				if ctx.Err() != nil {
 					// stopped part way through this one, which is tested again with the rest
@@ -280,11 +295,22 @@ func run(args []string) error {
 			if *only == "" && time.Since(last[key(t.Slug, o.Model)]) < *retest {
 				continue
 			}
+			withheld := false
 			for _, r := range agent.Run(ctx, o, t) {
+				if r.Withheld != "" {
+					// the box failed under the explore: nothing written, and the server is tested
+					// again on the next round instead of after -retest
+					fmt.Printf("%s %-8s %s: not written, the %s failed under it\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, r.Withheld)
+					withheld = true
+					continue
+				}
 				fmt.Printf("%s %-8s %s: %s, %s, %d tools, %d calls, %d errors\n", r.Ended.Format("15:04:05"), r.Task, r.Slug, r.Status, r.Outcome, r.Tools, r.Calls, r.Errors)
 				if ctx.Err() == nil { // a test a pause cut short is tested again after it
 					last[key(t.Slug, o.Model)] = r.Ended
 				}
+			}
+			if withheld {
+				delete(last, key(t.Slug, o.Model))
 			}
 			tested++
 			sleep(ctx, *pause)
@@ -308,7 +334,7 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 	if err := brain.Local(url); err != nil {
 		return nil, fmt.Errorf("-model-url: %w (the prompts hold strangers' text and stay on this machine)", err)
 	}
-	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: wait, MaxContext: maxContext()}
+	c := &brain.Client{URL: url, Model: model, MaxTokens: maxTokens, Timeout: replyTimeout(wait, maxTokens), MaxContext: maxContext()}
 	if temperature = strings.TrimSpace(temperature); temperature != "" {
 		t, err := strconv.ParseFloat(temperature, 64)
 		if err != nil || t < 0 || t > 2 {
@@ -317,6 +343,19 @@ func newBrain(url, model string, maxTokens int, wait time.Duration, temperature 
 		c.Temperature = &t
 	}
 	return c, nil
+}
+
+// slowestTPS is the slowest a model on the box writes, in tokens a second: the dense models run at
+// about 7.6 (DESIGN.md, "Numbers"), and this leaves room under that.
+const slowestTPS = 5
+
+// replyTimeout is how long one reply may take: -model-timeout, or long enough for a reply of
+// maxTokens at the slowest a model on the box writes, with two minutes for reading the prompt,
+// whichever is longer. A fixed 15 minutes cut off a dense model's longest replies part way and
+// the question was scored as no answer; gBench scales its server's timeout with the model for
+// the same reason. A reply cut off by this is the harness's, not the model's (brain.Down).
+func replyTimeout(wait time.Duration, maxTokens int) time.Duration {
+	return max(wait, time.Duration(maxTokens/slowestTPS)*time.Second+2*time.Minute)
 }
 
 // maxContext is the most of a model's context the lab uses, in tokens: ANCHOR_LAB_CONTEXT when
@@ -487,14 +526,21 @@ func runBench(ctx context.Context, state, sock string, unsafeCells bool, modelUR
 	if err != nil {
 		return bench.Score{}, err
 	}
-	if err := readyModel(ctx, j, b, model); err != nil {
-		return bench.Score{}, err
+	var ms modelState
+	checks := append(boxChecks(state, sock, unsafeCells)[:2], modelChecks(j, b, model, strings.TrimSpace(temperature) != "", &ms)...)
+	if _, err := preflight(ctx, checks, false); err != nil {
+		if ctx.Err() != nil {
+			return bench.Score{}, ctx.Err()
+		}
+		j.Event("", "bench.preflight", map[string]any{"model": model, "failed": firstWord(err)})
+		return bench.Score{}, fmt.Errorf("not started: %w", err)
 	}
 	lim := gateway.DefaultLimits
 	lim.MinInterval = 0 // the servers are in this process
 	o := agent.Options{Journal: j, Brain: b, Model: model, Limits: lim, Version: version, MaxTurns: 16, JobTimeout: 90 * time.Second, Attempts: 3,
 		UserAgent: "anchor-lab/" + version + " (bench)", Dial: dialer(sock, unsafeCells), Hold: func(ctx context.Context) { hold(ctx, j, state) }}
 	s := bench.RunN(ctx, o, runs)
+	s.Ready, s.Server = ms.Ready, ms.Server
 	if ctx.Err() != nil {
 		return s, errors.New("stopped before the end; no score kept")
 	}

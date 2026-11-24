@@ -16,9 +16,19 @@ import (
 // is NONE, being told the thing isn't there counts as the lookup (NotFoundCounts). 1 marked a
 // model wrong that asked, was told no and answered NONE. A score of 1 isn't thrown away or run
 // again: its run is in the journal, and Rescore grades those four tasks again from it.
-const Version = "anchor-lab-eval/2"
+//
+// 3 has the questions of 2 and four changes to the checking, from a review of the harness on 23
+// November 2026 (DESIGN.md, "anchor-lab-eval/3"): a question the box failed under (the model's
+// server, a cell) isn't scored (StatusFailed); on a NONE trap only a lookup about the thing asked
+// counts (Task.About), not any 404; a call to a tool the task rules out counts when the gateway
+// refused it too; and an amount is one number, so "1/2" isn't read as 12. A score of 2 is graded
+// again from its run's journal (Rescore3).
+const Version = "anchor-lab-eval/3"
 
-// Version1 is the set's first version, whose saved scores Rescore carries into this one.
+// Version2 is the set's second version, whose saved scores Rescore3 carries into this one.
+const Version2 = "anchor-lab-eval/2"
+
+// Version1 is the set's first version, whose saved scores Rescore carries into Version2.
 const Version1 = "anchor-lab-eval/1"
 
 // Task is one question with one right answer, worked out from the site when the task runs.
@@ -41,6 +51,15 @@ type Task struct {
 	// that answers the question. The NONE traps of both sets set it, the normal set's since
 	// anchor-lab-eval/2 (how an answer is checked is part of a set's version).
 	NotFoundCounts bool
+	// About is the words that name what the task asks about, in lower case: a slug, a model's
+	// id, a category. A lookup counts for the task only when it was about that thing: a fetch whose
+	// path, or a call whose arguments, hold one of the words and that the site answered (a 404 or a
+	// tool's "no such listing" included), or a read of one of Covers. Without it, a model that
+	// fetched some other listing, got a 404 and answered NONE was right with nothing behind it.
+	About []string
+	// Covers is the site's paths that list every candidate the task could be about (every
+	// listing, every price), so that reading one and not finding the thing is a lookup about it.
+	Covers []string
 	// Verify is for a task with many right answers (a set of listings that meets some rules):
 	// it says whether this answer is one of them, against the site as it is now. Want then gives
 	// one right answer, as an example, or says the rules can't be met any more.
@@ -714,19 +733,19 @@ var Tasks = []Task{
 	{ID: "known-data-licence", Level: 1, Kind: Text, Ask: "Under which licence does Anchor Terminal publish its data? Give the SPDX identifier.", Want: fixed("CC-BY-4.0", "CC BY 4.0")},
 
 	// ---- traps: the right answer is that there isn't one, or a tool the task must leave alone
-	{ID: "none-listing", Level: 2, Kind: None, NotFoundCounts: true, Ask: "What grade does Anchor Terminal give the listing zorblax-search-api? If there's no such listing, answer NONE.",
+	{ID: "none-listing", Level: 2, Kind: None, NotFoundCounts: true, About: []string{"zorblax"}, Covers: []string{"/api/v1/rankings.json", "/api/v1/categories.json"}, Ask: "What grade does Anchor Terminal give the listing zorblax-search-api? If there's no such listing, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			_, err := s.Listing(ctx, "zorblax-search-api")
 			return err
 		})},
-	{ID: "none-model", Level: 2, Kind: None, NotFoundCounts: true, Ask: "What does gpt-7-ultra cost per million input tokens on openai-api, by Anchor Terminal's price list? If the list has no such model, answer NONE.",
+	{ID: "none-model", Level: 2, Kind: None, NotFoundCounts: true, About: []string{"gpt-7", "openai-api"}, Covers: []string{"/api/v1/prices.json"}, Ask: "What does gpt-7-ultra cost per million input tokens on openai-api, by Anchor Terminal's price list? If the list has no such model, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			_, err := s.Model(ctx, "openai-api", "gpt-7-ultra")
 			return err
 		})},
-	{ID: "none-tool-count", Level: 2, Kind: None, NotFoundCounts: true, Ask: "How many tools does the Anchor Terminal listing anchor-quantum-mcp offer? If there's no such listing, answer NONE.",
+	{ID: "none-tool-count", Level: 2, Kind: None, NotFoundCounts: true, About: []string{"quantum"}, Covers: []string{"/api/v1/rankings.json"}, Ask: "How many tools does the Anchor Terminal listing anchor-quantum-mcp offer? If there's no such listing, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error { _, err := s.Tool(ctx, "anchor-quantum-mcp"); return err })},
-	{ID: "none-category", Level: 2, Kind: None, NotFoundCounts: true, Ask: "Which listing ranks first in Anchor Terminal's teleportation category? If there's no such category, answer NONE.",
+	{ID: "none-category", Level: 2, Kind: None, NotFoundCounts: true, About: []string{"teleport"}, Covers: []string{"/api/v1/rankings.json", "/api/v1/categories.json"}, Ask: "Which listing ranks first in Anchor Terminal's teleportation category? If there's no such category, answer NONE.",
 		Want: absent(func(ctx context.Context, s *Sources) error {
 			_, err := nth("teleportation", 1)(ctx, s)
 			return err
@@ -748,9 +767,76 @@ func init() {
 		panic("eval: Sample names a task that isn't in the set")
 	}
 	for _, t := range Tasks {
-		if seen[t.ID] || t.Want == nil || t.Level < 1 || t.Level > 3 {
+		if seen[t.ID] || t.Want == nil || t.Level < 1 || t.Level > 3 || !t.wellAbout() {
 			panic(fmt.Sprintf("eval: task %q is malformed or repeated", t.ID))
 		}
 		seen[t.ID] = true
 	}
+}
+
+// lookup is one call or fetch a task made, for Task.about: what it named (a fetch's path, a
+// call's arguments) and how the site answered: "ok", "none" (it isn't there), or "" when it
+// didn't answer at all.
+type lookup struct {
+	what     string
+	answered string
+	fetch    bool
+}
+
+// about counts the lookups about the thing the task names. A task with no About counts none.
+func (t Task) about(looked []lookup) int {
+	if len(t.About) == 0 {
+		return 0
+	}
+	n := 0
+	for _, l := range looked {
+		if l.answered == "" {
+			continue // a provider's error says nothing about whether the thing is there
+		}
+		what := strings.ToLower(l.what)
+		hit := false
+		for _, w := range t.About {
+			if strings.Contains(what, w) {
+				hit = true
+				break
+			}
+		}
+		if !hit && l.answered == "ok" {
+			// a read of a covering file: by lab.fetch, its path; by a tool (read_page), its
+			// arguments naming the path
+			p := what
+			if i := strings.IndexAny(p, "?#"); l.fetch && i >= 0 {
+				p = p[:i]
+			}
+			for _, c := range t.Covers {
+				if l.fetch && strings.HasSuffix(p, c) || !l.fetch && strings.Contains(p, c) {
+					hit = true
+					break
+				}
+			}
+		}
+		if hit {
+			n++
+		}
+	}
+	return n
+}
+
+// wellAbout says a task's About is usable: every NONE trap has one, and its words are lower case
+// and not empty, since lookups are matched in lower case.
+func (t Task) wellAbout() bool {
+	if t.Kind == None && len(t.About) == 0 {
+		return false
+	}
+	for _, w := range t.About {
+		if w == "" || w != strings.ToLower(w) {
+			return false
+		}
+	}
+	for _, c := range t.Covers {
+		if !strings.HasPrefix(c, "/") {
+			return false
+		}
+	}
+	return true
 }

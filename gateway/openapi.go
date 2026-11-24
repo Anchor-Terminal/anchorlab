@@ -375,10 +375,15 @@ func (s *Session) callAPI(ctx context.Context, c Call, name string, args map[str
 	body, err := io.ReadAll(io.LimitReader(resp.Body, s.Limits.MaxBody+1))
 	c.Ms, c.HTTP, c.Resp = int(time.Since(start).Milliseconds()), resp.StatusCode, len(body)
 	switch {
-	case err != nil && isTimeout(err):
+	case err != nil && (isTimeout(err) || errors.Is(err, context.DeadlineExceeded)):
 		return fail("timeout", "the answer stopped part way")
 	case int64(len(body)) > s.Limits.MaxBody:
 		return fail("too_big", fmt.Sprintf("the answer is over %d bytes", s.Limits.MaxBody))
+	case err != nil:
+		// the connection broke before the body was whole (it declared more bytes than came, or the
+		// stream ended in the middle). What came is kept out of the answer: half a document isn't
+		// the operation working, whatever its status said
+		return fail("incomplete", fmt.Sprintf("the answer broke off after %d bytes (HTTP %d)", len(body), resp.StatusCode))
 	}
 	text := strings.TrimSpace(string(body))
 	if !isText(text) {
@@ -388,7 +393,9 @@ func (s *Session) callAPI(ctx context.Context, c Call, name string, args map[str
 	case code >= 200 && code < 300:
 	case code == 401 || code == 403:
 		return fail("auth", fmt.Sprintf("HTTP %d: the API wants a key", code))
-	case code >= 500:
+	case code == 429 || code >= 500:
+		// the API is busy or broken, which no better argument would change: it isn't the
+		// program's error to fix (tool_error), and gBench counts a 429 as the server's too
 		return fail("http_error", fmt.Sprintf("HTTP %d: %s", code, clip(text, 2000)))
 	default:
 		// the API's own words, so the program can see why and try again with better parameters

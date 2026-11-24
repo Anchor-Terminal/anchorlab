@@ -123,6 +123,19 @@ func evalCmd(args []string) error {
 		s.Model, set.Version, s.ModeOf(), s.Runs, s.Points, s.Correct, s.Scored, s.Pct, s.Steady, s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3],
 		s.Forbidden, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000)
 	fmt.Printf("  time: %.0f s a question on average, %.1f output tokens a second, %.1f min in all\n", s.SecPerTask, s.OutputTPS, float64(s.WallMs)/60000)
+	fmt.Printf("  setup: %s\n", s.Setup)
+	if s.Ready != "" || s.Server != "" {
+		fmt.Printf("  before it: %s; the server: %s\n", s.Ready, s.Server)
+	}
+	if len(s.PassPoints) > 1 {
+		fmt.Printf("  each pass: %v points, %.1f%% right on average\n", s.PassPoints, s.AvgPct)
+	}
+	if len(s.Health) > 0 {
+		fmt.Printf("  replies that went wrong as replies: %s\n", healthLine(s.Health))
+	}
+	if s.Measure != "" {
+		fmt.Printf("  measured: %s (more than one reply in ten hit -max-tokens; the score says as much about the limit as the model)\n", s.Measure)
+	}
 	if len(s.Wrong) > 0 {
 		fmt.Printf("  wrong: %s\n", strings.Join(s.Wrong, ", "))
 	}
@@ -134,6 +147,9 @@ func evalCmd(args []string) error {
 	}
 	if s.Unreachable > 0 {
 		fmt.Printf("  %d tasks found the site or its MCP server not answering, and aren't counted\n", s.Unreachable)
+	}
+	if s.Failed > 0 {
+		fmt.Printf("  %d tasks the model's server or a cell failed under, asked twice, and aren't counted\n", s.Failed)
 	}
 	return nil
 }
@@ -165,14 +181,24 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	if err != nil {
 		return eval.Score{}, err
 	}
-	if err := readyModel(ctx, j, b, model); err != nil {
-		return eval.Score{}, err
+	// the checks before a run (preflight.go): the disk, the state, the site, a cell, the model
+	// loading, its sampling and the readiness questions, stopping at the first that fails
+	var ms modelState
+	checks := append(boxChecks(state, sock, unsafeCells), modelChecks(j, b, model, strings.TrimSpace(temperature) != "", &ms)...)
+	if _, err := preflight(ctx, checks, false); err != nil {
+		if ctx.Err() != nil {
+			return eval.Score{}, ctx.Err()
+		}
+		j.Event("", "eval.preflight", map[string]any{"model": model, "failed": firstWord(err)})
+		return eval.Score{}, fmt.Errorf("not started: %w", err)
 	}
 	o := evalOptions(j, b, model, sock, unsafeCells, mode)
+	o.Ready, o.Server = ms.Ready, ms.Server
 	o.Set = set
 	o.Hold = func(ctx context.Context) { hold(ctx, j, state) }
+	o.MaxTokens, o.Temperature, o.Context = maxTokens, strings.TrimSpace(temperature), maxContext()
 	began := time.Now()
-	cp, why, err := eval.OpenCheckpointSet(state, set, model, mode, runs, began)
+	cp, why, err := eval.OpenCheckpointSet(state, set, model, mode, runs, began, o.Setup())
 	if err != nil {
 		return eval.Score{}, fmt.Errorf("the evaluation's checkpoint: %w", err)
 	}
@@ -180,7 +206,7 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	if done, by := cp.Count(); why == "resumed" {
 		// the stats' progress counts on from here, so the questions done before the stop still count
 		j.Event("", "eval.resume", map[string]any{"model": model, "started": cp.Started, "done": done, "right": by[eval.StatusCorrect],
-			"wrong": by[eval.StatusWrong] + by[eval.StatusNoAnswer], "skipped": by[eval.StatusSkipped], "unreachable": by[eval.StatusUnreachable], "stops": cp.Stops})
+			"wrong": by[eval.StatusWrong] + by[eval.StatusNoAnswer], "skipped": by[eval.StatusSkipped], "unreachable": by[eval.StatusUnreachable] + by[eval.StatusFailed], "stops": cp.Stops})
 	} else if why != "new" {
 		j.Event("", "eval.restart", map[string]any{"model": model, "why": why})
 	}
@@ -195,6 +221,16 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	case s.Unreachable*2 > s.Runs*s.Tasks:
 		cp.Finish()
 		return s, errors.New("the site or its MCP server didn't answer most of the tasks; no score kept")
+	case s.Failed > eval.MaxFailed(s.Runs, s.Tasks):
+		// the questions that went through are kept and the failed ones weren't written down, so
+		// the next evaluation of this model asks only those
+		cp.Stop(time.Since(began))
+		return s, fmt.Errorf("the model's server or the box failed under %d questions, more than the %d a score may leave out; no score kept, and the next run asks those again (journalctl -u llama-server, -u anchor-lab-cell.socket)", s.Failed, eval.MaxFailed(s.Runs, s.Tasks))
+	case s.Scored == 0:
+		// nothing had a right answer to hold an answer against: a score of 0 would say the model
+		// got everything wrong, so there's none (gBench withholds an empty score the same way)
+		cp.Finish()
+		return s, errors.New("no question could be scored (the site moved under every one, or none was asked); no score kept")
 	}
 	if err := eval.Save(state, s); err != nil {
 		cp.Stop(time.Since(began)) // the questions are still good: try again from them
@@ -209,13 +245,13 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 // an answer is checked doesn't leave the lab with no scores until every model has run again. The
 // harness does it when it starts, as itself, and a second start finds nothing to do.
 func carryScores(j *journal.Journal, state string) {
-	done, lost, err := eval.RescoreAll(state, true)
+	done, lost, err := eval.CarryAll(state, true)
 	for _, r := range done {
-		j.Event("", "eval.rescored", map[string]any{"model": r.Model, "mode": r.Mode, "from": eval.Version1, "set": eval.Version,
-			"was": r.Was, "points": r.Now, "passes": r.Flips(), "missing": r.Missing, "disagree": len(r.Disagree)})
+		j.Event("", "eval.rescored", map[string]any{"model": r.Model, "mode": r.Mode, "from": r.From, "set": r.To,
+			"was": r.Was, "points": r.Now, "passes": r.Flips(), "missing": r.Missing, "disagree": len(r.Disagree), "failed": r.Unscored})
 	}
 	for _, s := range lost {
-		j.Event("", "eval.unscored", map[string]any{"model": s.Model, "mode": s.ModeOf(), "from": eval.Version1})
+		j.Event("", "eval.unscored", map[string]any{"model": s.Model, "mode": s.ModeOf(), "from": s.V})
 	}
 	if err != nil {
 		j.Event("", "eval.rescore.failed", map[string]any{"kept": len(done)})
@@ -225,15 +261,16 @@ func carryScores(j *journal.Journal, state string) {
 // evalRescore prints what grading the old scores again changes, model by model, and with keep
 // saves the new ones. Reading needs no more than the anchorlab group has.
 func evalRescore(out io.Writer, state string, keep bool) error {
-	done, lost, err := eval.RescoreAll(state, keep)
+	done, lost, err := eval.CarryAll(state, keep)
 	if err != nil {
 		return err
 	}
-	fmt.Fprintf(out, "%s to %s, from each run's own journal. No model is asked and nothing runs.\n", eval.Version1, eval.Version)
-	fmt.Fprintln(out, "Only a pass of a NONE trap can change, from wrong to right: the model asked, was told there's no such thing, and answered NONE.")
+	fmt.Fprintf(out, "Each model's latest score brought up to %s (and the hard set's to %s), from each run's own journal. No model is asked and nothing runs.\n", eval.Version, eval.HardVersion)
+	fmt.Fprintf(out, "From %s to %s only a pass of a NONE trap can change, from wrong to right: the model asked, was told there's no such thing, and answered NONE.\n", eval.Version1, eval.Version2)
+	fmt.Fprintf(out, "From %s a pass the box failed under leaves the score, and a right pass becomes wrong when it asked for a tool the task rules out, when a NONE trap's run never looked at the thing asked, or when a number answer isn't one number.\n", eval.Version2)
 	if len(done) > 0 {
 		tw := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(tw, "\nmodel\tmode\twas\tnow\tright\tpasses changed")
+		fmt.Fprintln(tw, "\nmodel\tmode\tfrom\tto\twas\tnow\tright\tpasses changed")
 		for _, r := range done {
 			var which []string
 			for _, id := range sortedKeys(r.Flipped) {
@@ -243,23 +280,26 @@ func evalRescore(out io.Writer, state string, keep bool) error {
 			if len(which) > 0 {
 				note = " (" + strings.Join(which, ", ") + ")"
 			}
+			if r.Unscored > 0 {
+				note += fmt.Sprintf("; %d passes the box failed under, left out", r.Unscored)
+			}
 			if r.Missing > 0 {
-				note += fmt.Sprintf("; %d passes of the traps aren't in the journal and stay as they were", r.Missing)
+				note += fmt.Sprintf("; %d passes aren't in the journal and stay as they were", r.Missing)
 			}
 			if len(r.Disagree) > 0 {
 				note += "; the journal and the score disagree on " + strings.Join(r.Disagree, ", ") + ", left as it was"
 			}
-			fmt.Fprintf(tw, "%s\t%s\t%d\t%d\t%d to %d\t%d%s\n", r.Model, r.Mode, r.Was, r.Now, r.WasRight, r.NowRight, r.Flips(), note)
+			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%d\t%d\t%d to %d\t%d%s\n", r.Model, r.Mode, r.From, r.To, r.Was, r.Now, r.WasRight, r.NowRight, r.Flips(), note)
 		}
 		tw.Flush()
 		if keep {
-			fmt.Fprintf(out, "\nkept: %d scores of %s, beside the old ones in %s\n", len(done), eval.Version, filepath.Join(state, eval.File))
+			fmt.Fprintf(out, "\nkept: %d scores, beside the old ones in %s and %s\n", len(done), filepath.Join(state, eval.File), filepath.Join(state, eval.HardFile))
 		} else {
 			fmt.Fprintln(out, "\nnot kept: the lab keeps them itself when it next starts")
 		}
 	}
 	for _, s := range lost {
-		fmt.Fprintf(out, "%s (%s mode, %d): its run isn't in the journal, so it has no score of %s until it runs again\n", s.Model, s.ModeOf(), s.Points, eval.Version)
+		fmt.Fprintf(out, "%s (%s mode, %d, %s): its run isn't in the journal, so it has no score of the newer version until it runs again\n", s.Model, s.ModeOf(), s.Points, s.V)
 	}
 	if len(done) == 0 && len(lost) == 0 {
 		now, _ := eval.Load(state)
@@ -328,13 +368,37 @@ func evalCompare(state string, set eval.Set) error {
 	if set.Version != eval.Version {
 		fmt.Printf("the %s set (%s): scored apart from the Lab score, and not ranked\n", set.Name, set.Version)
 	}
-	fmt.Printf("%-28s %-6s %5s %7s %6s %6s %8s %8s %8s %5s %10s %9s %7s %6s  %s\n", "model", "mode", "score", "right", "%", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "s/q", "tok/s", "when")
+	fmt.Printf("%-28s %-6s %5s %7s %6s %11s %6s %8s %8s %8s %5s %10s %9s %7s %6s  %s\n", "model", "mode", "score", "right", "%", "95% range", "steady", "level 1", "level 2", "level 3", "runs", "tokens", "model min", "s/q", "tok/s", "when")
 	for _, s := range scores {
-		fmt.Printf("%-28.28s %-6s %5d %3d/%-3d %6.1f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f %7.0f %6.1f  %s\n", s.Model, s.ModeOf(), s.Points, s.Correct, s.Scored, s.Pct, s.Steady,
+		lo, hi := eval.Wilson(s.Correct, s.Scored)
+		fmt.Printf("%-28.28s %-6s %5d %3d/%-3d %6.1f %5.0f-%-5.0f %6d %4d/%-3d %4d/%-3d %4d/%-3d %5d %10d %9.1f %7.0f %6.1f  %s\n", s.Model, s.ModeOf(), s.Points, s.Correct, s.Scored, s.Pct, lo, hi, s.Steady,
 			s.ByLevel[1], s.OfLevel[1], s.ByLevel[2], s.OfLevel[2], s.ByLevel[3], s.OfLevel[3], s.Runs, s.PromptTokens+s.OutputTokens, float64(s.ModelMs)/60000, s.SecPerTask, s.OutputTPS, s.Ended.Format("2006-01-02 15:04"))
+		if s.Failed > 0 || s.Truncated > 0 {
+			fmt.Printf("%-28s %d questions left out because the box failed under them, %d replies cut off at the token limit\n", "", s.Failed, s.Truncated)
+		}
+		if len(s.Health) > 0 || s.Measure != "" {
+			fmt.Printf("%-28s replies: %s %s\n", "", healthLine(s.Health), s.Measure)
+		}
+		if strings.ContainsAny(s.Ready, ":;") { // a readiness question failed, or the template
+			fmt.Printf("%-28s before it: %s\n", "", s.Ready)
+		}
+	}
+	setups := map[string]int{}
+	for _, s := range scores {
+		setups[s.Setup]++
+	}
+	if len(setups) > 1 {
+		fmt.Println("\nnot all of these were asked the same way:")
+		for setup, n := range setups {
+			if setup == "" {
+				setup = "(from before the setup was written down)"
+			}
+			fmt.Printf("  %d with %s\n", n, setup)
+		}
 	}
 	if len(scores) > 1 {
-		fmt.Println("which tasks two of them disagree on: anchor-lab eval -flips <model>,<model>")
+		fmt.Println("95% range: where the share right could be with the luck of this many questions (Wilson). Two models whose ranges overlap may not differ;")
+		fmt.Println("which tasks two of them disagree on, and whether that's luck: anchor-lab eval -flips <model>,<model>")
 	}
 	return nil
 }
@@ -362,8 +426,20 @@ func evalFlips(state string, set eval.Set, pair, mode string) error {
 	}
 	fl := eval.FlipsIn(set.Tasks, sa, sb)
 	fmt.Printf("%s %d/%d right, %s %d/%d; %d tasks differ\n", a, sa.Correct, sa.Scored, b, sb.Correct, sb.Scored, len(fl))
+	aOnly := 0
 	for _, f := range fl {
+		if 2*f.A[0] > f.A[1] {
+			aOnly++
+		}
 		fmt.Printf("  %-36s %s %d/%d   %s %d/%d\n", f.Task, a, f.A[0], f.A[1], b, f.B[0], f.B[1])
+	}
+	if len(fl) > 0 {
+		p := eval.SignTest(aOnly, len(fl)-aOnly)
+		verdict := "within luck of each other at this many questions"
+		if p < 0.05 {
+			verdict = "unlikely to be luck"
+		}
+		fmt.Printf("%s right where %s isn't: %d; the other way: %d. Sign test on those, two-sided: p = %.3f, %s\n", a, b, aOnly, len(fl)-aOnly, p, verdict)
 	}
 	return nil
 }
@@ -574,4 +650,13 @@ func evalGrade(set eval.Set, paths, befores string) error {
 		fmt.Printf("  right in some passes only: %s\n", strings.Join(s.Flaky, ", "))
 	}
 	return nil
+}
+
+// healthLine is a score's reply health in words: "2 empty, 1 looped".
+func healthLine(h map[string]int) string {
+	var parts []string
+	for _, k := range sortedKeys(h) {
+		parts = append(parts, fmt.Sprintf("%d %s", h[k], k))
+	}
+	return strings.Join(parts, ", ")
 }

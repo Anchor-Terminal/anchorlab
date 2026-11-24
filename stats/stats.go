@@ -39,8 +39,9 @@ const Version = "anchor-lab-stats/1"
 const Recent = 20
 
 // stale is how long a run may go without an event before it isn't called current. A model's reply
-// may take up to 15 minutes (-model-timeout) with nothing written meanwhile.
-const stale = 20 * time.Minute
+// may take nearly an hour with nothing written meanwhile: the harness gives a reply time for its
+// whole token budget at the box's slowest speed (replyTimeout in cmd/anchor-lab).
+const stale = 60 * time.Minute
 
 // Stats is the whole answer.
 type Stats struct {
@@ -900,7 +901,8 @@ func progress(state string, t time.Time) *Progress {
 				}
 				p.Pass, p.Passes, p.Question, p.Of, p.LastEvent = e.Pass, e.Passes, e.N, e.Of, e.T.UTC()
 			case "eval.end":
-				if p == nil || e.Run == "" {
+				if p == nil || e.Run == "" || e.Status == "failed" {
+					// a question the box failed under is asked again, and counted when that ends
 					continue
 				}
 				p.Done++

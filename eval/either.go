@@ -107,7 +107,8 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 	j := o.Journal
 	tb, ok := o.Brain.(ToolBrain)
 	if !ok {
-		j.Event(run, "model.failed", map[string]any{"why": "no tool calls"})
+		j.Event(run, "model.failed", map[string]any{"why": "no tool calls", "down": true})
+		r.Failed = "model" // the harness's model client can't make tool calls: the box's doing
 		return "", false
 	}
 	offered := nativeTools(tools)
@@ -123,7 +124,7 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 	for turn := 1; turn <= turns && ctx.Err() == nil; turn++ {
 		start := time.Now()
 		reply, usage, err := tb.ChatTools(ctx, msgs, offered)
-		if err != nil && offered != nil && ctx.Err() == nil {
+		if err != nil && offered != nil && ctx.Err() == nil && !brain.IsDown(err) {
 			// a request with tools failed: once more with them, since a malformed tool call is
 			// often bad luck in the sampling; then the task carries on with programs only, the
 			// conversation so far as plain text, so the model still gets to the answer. A model
@@ -133,7 +134,7 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 			j.Event(run, "model.retry", map[string]any{"turn": turn})
 			reply, more, err = tb.ChatTools(ctx, msgs, offered)
 			usage = addUsage(usage, more)
-			if err != nil && ctx.Err() == nil {
+			if err != nil && ctx.Err() == nil && !brain.IsDown(err) {
 				offered, r.NoTools, msgs = nil, true, plain(msgs)
 				j.Event(run, "model.notools", map[string]any{"turn": turn})
 				reply, more, err = tb.ChatTools(ctx, msgs, nil)
@@ -148,12 +149,20 @@ func (o Options) converseEither(ctx context.Context, run string, t Task, sess *g
 			// the conversation was sent with its oldest output cut to fit the model's context
 			j.Event(run, "model.trimmed", map[string]any{"turn": turn, "chars": usage.Trimmed})
 		}
+		if usage.Cut {
+			r.Truncated++
+			j.Event(run, "model.cut", map[string]any{"turn": turn, "outputTokens": usage.OutputTokens})
+		}
 		if err != nil {
-			j.Event(run, "model.failed", map[string]any{"turn": turn})
+			j.Event(run, "model.failed", map[string]any{"turn": turn, "down": brain.IsDown(err)})
+			if brain.IsDown(err) {
+				r.Failed = "model"
+			}
 			return "", false
 		}
 		calls := reply.ToolCalls
 		j.Artifact(run, fmt.Sprintf("model-%d.txt", turn), []byte(replyText(reply)))
+		r.noteHealth(j, run, turn, replyHealth(reply.Content, reply.Reasoning, len(calls)))
 		if len(calls) == 0 {
 			if a, ok := FindAnswer(reply.Content); ok {
 				return a, true
@@ -287,7 +296,7 @@ func path(r TaskResult) string {
 }
 
 func addUsage(a, b brain.Usage) brain.Usage {
-	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens, Trimmed: max(a.Trimmed, b.Trimmed)}
+	return brain.Usage{PromptTokens: a.PromptTokens + b.PromptTokens, OutputTokens: a.OutputTokens + b.OutputTokens, Trimmed: max(a.Trimmed, b.Trimmed), Cut: b.Cut, Reasoning: b.Reasoning}
 }
 
 // programName is a tool's name as a program calls it: lab_fetch is lab.fetch there.

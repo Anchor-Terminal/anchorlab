@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/Anchor-Terminal/anchorlab/journal"
 )
 
 // A Checkpoint is an evaluation part done: each question is written down as it finishes, so a stop
@@ -38,6 +40,9 @@ type resumeHead struct {
 	Mode    string    `json:"mode,omitempty"` // empty is code mode, as in a score
 	Runs    int       `json:"runs"`
 	Started time.Time `json:"started"`
+	// Setup is how the evaluation asks the model (Score.Setup): one stopped under other limits
+	// starts again, so a score isn't made of passes asked two ways
+	Setup string `json:"setup,omitempty"`
 }
 
 type resumeLine struct {
@@ -72,8 +77,13 @@ func OpenCheckpoint(state, model, mode string, runs int, now time.Time) (c *Chec
 	return OpenCheckpointSet(state, Normal(), model, mode, runs, now)
 }
 
-// OpenCheckpointSet is OpenCheckpoint for a model's evaluation on any set.
-func OpenCheckpointSet(state string, set Set, model, mode string, runs int, now time.Time) (c *Checkpoint, why string, err error) {
+// OpenCheckpointSet is OpenCheckpoint for a model's evaluation on any set. setup, when given, is
+// how this evaluation asks the model (Score.Setup), and one stopped under another starts over.
+func OpenCheckpointSet(state string, set Set, model, mode string, runs int, now time.Time, setup ...string) (c *Checkpoint, why string, err error) {
+	asked := ""
+	if len(setup) > 0 {
+		asked = setup[0]
+	}
 	if mode == "" {
 		mode = ModeCode
 	}
@@ -98,6 +108,8 @@ func OpenCheckpointSet(state string, set Set, model, mode string, runs int, now 
 			why = "started over: a different evaluation"
 		case now.Sub(head.Started) > ResumeMaxAge:
 			why = "started over: stopped too long ago"
+		case head.Setup != "" && asked != "" && head.Setup != asked:
+			why = "started over: asked differently (the limits or the settings changed)"
 		default:
 			c.Started = head.Started
 			why = "resumed"
@@ -106,10 +118,15 @@ func OpenCheckpointSet(state string, set Set, model, mode string, runs int, now 
 	if why != "resumed" {
 		c.Done, c.PriorMs, c.Stops = map[int]map[string]TaskResult{}, 0, 0
 		c.Started = now.UTC()
-		b, _ := json.Marshal(resumeHead{V: ResumeVersion, Set: set.Version, Model: model, Mode: mode, Runs: runs, Started: c.Started})
+		b, _ := json.Marshal(resumeHead{V: ResumeVersion, Set: set.Version, Model: model, Mode: mode, Runs: runs, Started: c.Started, Setup: asked})
 		if err := os.WriteFile(path, append(b, '\n'), 0o640); err != nil {
 			return nil, "", err
 		}
+	}
+	// a stop in the middle of a write leaves the last line cut short. read leaves it out, and the
+	// next line written mustn't be joined to it, or that line is lost too on the next start
+	if err := journal.MendTail(path); err != nil {
+		return nil, "", err
 	}
 	c.f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o640)
 	if err != nil {
@@ -169,16 +186,17 @@ func (c *Checkpoint) Count() (done int, by map[string]int) {
 	return done, by
 }
 
-// Record writes down a finished question, on disk before the next one starts.
-func (c *Checkpoint) Record(pass int, r TaskResult) {
+// Record writes down a finished question, on disk before the next one starts. An error says it
+// isn't on disk: the run goes on, and a stop before the next good write asks it again.
+func (c *Checkpoint) Record(pass int, r TaskResult) error {
 	if c == nil {
-		return
+		return nil
 	}
 	if c.Done[pass] == nil {
 		c.Done[pass] = map[string]TaskResult{}
 	}
 	c.Done[pass][r.ID] = r
-	c.write(resumeLine{Pass: pass, Result: &r})
+	return c.write(resumeLine{Pass: pass, Result: &r})
 }
 
 // Stop keeps the checkpoint for the next start, with how long this stretch took.
@@ -199,11 +217,13 @@ func (c *Checkpoint) Finish() {
 	os.Remove(c.path)
 }
 
-func (c *Checkpoint) write(l resumeLine) {
+func (c *Checkpoint) write(l resumeLine) error {
 	b, err := json.Marshal(l)
 	if err != nil {
-		return
+		return err
 	}
-	c.f.Write(append(b, '\n'))
-	c.f.Sync()
+	if _, err := c.f.Write(append(b, '\n')); err != nil {
+		return err
+	}
+	return c.f.Sync()
 }

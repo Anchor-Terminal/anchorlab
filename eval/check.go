@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Kind is how an answer is compared with the right one.
@@ -31,7 +33,13 @@ type Answer struct {
 	Also  []string
 }
 
-var nonDigit = regexp.MustCompile(`[^0-9eE+\-.]`)
+// numberToken is one number as an answer writes it: a sign, digits with or without commas
+// between thousands, a decimal part, an exponent.
+var numberToken = regexp.MustCompile(`[-+]?(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?|[-+]?\.[0-9]+`)
+
+// joiners are what turns two numbers into a sum, a fraction or a range: an answer with one of
+// them between digits is several numbers, not one.
+var joiners = regexp.MustCompile(`[0-9.]\s*[/×*x^:+–-]\s*[0-9.]|[0-9]\s+[0-9]`)
 
 // norm is an answer with what doesn't matter taken off: case, quotes, markdown, a full stop.
 func norm(s string) string {
@@ -43,16 +51,38 @@ func norm(s string) string {
 	return strings.ToLower(s)
 }
 
+// number is the one number in an answer. What may be around it is a currency ($, £, €, USD), a
+// percent sign, commas between thousands and words (a unit, "about"). An answer with two numbers
+// in it, or two numbers joined by a slash, an operator or a dash, isn't one number and isn't
+// read as one: "1/2" was once read as 12, by taking out everything that wasn't a digit.
 func number(s string) (float64, bool) {
-	s = strings.ReplaceAll(norm(s), ",", "")
-	s = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(s, "usd"), "usd"))
-	s = nonDigit.ReplaceAllString(s, "")
-	if s == "" {
+	s = strings.ReplaceAll(norm(s), "−", "-") // a typographic minus is a minus
+	if joiners.MatchString(s) || scaled.MatchString(s) {
 		return 0, false
 	}
-	f, err := strconv.ParseFloat(s, 64)
+	at := numberToken.FindAllStringIndex(s, -1)
+	if len(at) != 1 {
+		return 0, false
+	}
+	// a number written onto a word is part of a name (gpt-4, top-3, v2), not an amount
+	if i := at[0][0]; i > 0 {
+		before, _ := utf8.DecodeLastRuneInString(s[:i])
+		if unicode.IsLetter(before) || (before == '-' || before == '+') && i > 1 && unicode.IsLetter(lastRune(s[:i-1])) {
+			return 0, false
+		}
+	}
+	f, err := strconv.ParseFloat(strings.ReplaceAll(s[at[0][0]:at[0][1]], ",", ""), 64)
 	return f, err == nil
 }
+
+func lastRune(s string) rune {
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return r
+}
+
+// scaled is a number with a scale or a fraction written after it (16k, 1.5M, 2 million, 12½),
+// which isn't the plain number the model was asked for and can't be read as the figure before it.
+var scaled = regexp.MustCompile(`[0-9](?:\s*(?:k|m|bn|b|thousand|million|billion|trillion)\b|[½¼¾⅓⅔])`)
 
 var isoDate = regexp.MustCompile(`(?:^|[^0-9])(20[0-9]{2}-[01][0-9]-[0-3][0-9])(?:[^0-9]|$)`)
 
@@ -64,7 +94,9 @@ func dateIn(s string) string {
 }
 
 // noneWords are the ways a model says there's no such thing.
-var noneWords = map[string]bool{"none": true, "not listed": true, "not found": true, "n/a": true, "no such listing": true, "unknown": true, "does not exist": true}
+// "unknown" isn't one, since anchor-lab-eval/3: a model that doesn't know hasn't said the thing
+// isn't there.
+var noneWords = map[string]bool{"none": true, "not listed": true, "not found": true, "n/a": true, "no such listing": true, "does not exist": true}
 
 // Correct says whether got is the right answer to a task of kind k. tol is the task's tolerance
 // for Number.

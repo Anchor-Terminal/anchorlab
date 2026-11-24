@@ -1,6 +1,6 @@
 # The models MODELS.md runs, one file a line: the name the harness asks for, the folder it goes in
 # under the models folder, the Hugging Face repository, the file, its size in bytes and its SHA-256
-# as the Hub gave them on 17 and 18 November 2026 (the OpenCode adapter's on 22 November). fetch.sh downloads and checks against these; a
+# as the Hub gave them on 17 and 18 November 2026 (the OpenCode adapter's on 22 November, Inkling 2 Mini's on 24 November). fetch.sh downloads and checks against these; a
 # file the publisher has replaced since fails the check, and its line is updated by hand after a
 # look.
 #
@@ -41,6 +41,7 @@ laguna-xs-2.1                   poolside/laguna-xs-2.1                 poolside/
 apodex-1.1-mini                 apodex/apodex-1.1-mini                 apodex/Apodex-1.1-mini-GGUF                                    apodex1.1-35b-Q4_K_M-MTP.gguf                                              21713462496  839e0503b26fcc10a6f2a358a539e4cb8e7646d9f5c70e84f373887de4526b0a
 north-mini-code-1.0             north/north-mini-code-1.0              unsloth/North-Mini-Code-1.0-GGUF                               North-Mini-Code-1.0-Q8_0.gguf                                              32437264480  652eeb9932e8020ef7b35374189411848187fa58796ded0ceee258bd9d36426b
 lfm3-1.7b                       liquid/lfm3-1.7b                       LiquidAI/LFM3-1.7B-GGUF                                        LFM3-1.7B-Q8_0.gguf                                                        1846238496   8f6b24182258205e9e01e21f1f24a1f208c1e8115578825d202ce39976af20b6
+inkling-2-mini                  thinkingmachines/inkling-2-mini        ggml-org/Inkling-2-Mini-GGUF                                   Inkling-2-Mini-Q8_0.gguf                                                   27820099264  d57542f8aea5d7639beba5fc4ae7f584754916f63ac5d5a69328c27f652f45da
 ornith-1.5-122b                 ornith/ornith-1.5-122b                 ornith-ai/Ornith-1.5-122B-GGUF                                 Ornith-1.5-122B-Q4_K_M.gguf                                                75843911648  729fe18c2491aaa446074a923e12f184f9f2239ffd5ce3dae47b0ce9cf8df40c
 occamy-1.0                      occamy/occamy-1.0                      Accio-Lab/occamy-1.0-GGUF                                      occamy-1.0-Q8_0.gguf                                                       36903139456  9bd6eceae8434098c8c7ebec33e4ca0d0bd3f004c2bddf37d16cd906448fdbdd
 muse-glimmer-30b                muse/muse-glimmer-30b                  meta-models/Muse-Glimmer-30B-GGUF                              Muse-Glimmer-30B-KQuant-Dynamic-Q4_K_XL.gguf                               19653960832  ac7023d6a4c704eb9af54ab53e476a66b7f5b6c0ef2fc4a8dde5253c291a6c38

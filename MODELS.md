@@ -41,8 +41,9 @@ picks for that machine with llama.cpp, for agents and tool calling.
 | `north-mini-code-1.0` | [North Mini Code 1.0](https://www.anchorterminal.com/tools/north-mini-code-1-0) | Q8_0, unsloth | 32.4 GB | not estimated yet |
 | `muse-glimmer-30b` | [Muse Glimmer 30B](https://www.anchorterminal.com/tools/muse-glimmer-30b) | Q4_K_XL, meta-models | 19.7 GB | not estimated yet |
 | `lfm3-1.7b` | [LFM3-1.7B](https://www.anchorterminal.com/tools/lfm3-1-7b) | Q8_0, LiquidAI | 1.8 GB | not estimated yet |
+| `inkling-2-mini` | [Inkling 2 Mini](https://www.anchorterminal.com/tools/inkling-2-mini) | Q8_0, ggml-org | 27.8 GB | not estimated yet |
 
-About 1.02 TB together, 30 models: the calculator's picks for agents and tool calling, and the newer agent models it can't score yet, for the evaluation to (README.md, "The evaluation"). The estimates are the calculator's, for one stream, from the machine's
+About 1.05 TB together, 31 models: the calculator's picks for agents and tool calling, and the newer agent models it can't score yet, for the evaluation to (README.md, "The evaluation"). The estimates are the calculator's, for one stream, from the machine's
 memory bandwidth (256 GB/s) and the gigabytes read for each token. They aren't measurements; the
 bench and the lab's own runs are. The calculator lists Q4_K_M for both Gemma models; Google
 publishes quantisation-aware trained Q4_0 builds, made to be run at 4 bits, and those are what's
@@ -217,6 +218,7 @@ temperature of its own unless `ANCHOR_LAB_TEMPERATURE` is set, so these apply.
 | `north-mini-code-1.0` | 1.0 | 0.95 | | | | |
 | `muse-glimmer-30b` | 1.0 | 0.95 | 64 | | | never greedy |
 | `lfm3-1.7b` | 0.1 | | 50 | | | `repeat-penalty = 1.1` |
+| `inkling-2-mini` | 1.0 | | | | | its generation config sets temperature alone; needs llama.cpp b12611 or later |
 
 Notes:
 
@@ -228,6 +230,14 @@ Notes:
   and presence_penalty 1.5, for a preset of your own that turns thinking off.
 - **Qwen3.5-122B-A10B** comes in two files; the preset names the first and llama.cpp finds the
   second beside it.
+- **Inkling 2 Mini** is Thinking Machines Lab's looped mixture of experts: 24 layers, of which 6 to 17
+  run three times a token, so it reads more for each token than its 3.4B active parameters
+  suggest. llama.cpp runs it from b12600 (20 November 2026), and b12611 (21 November) fixed the
+  later passes through the loop, so the box's llama.cpp is pulled and built again first
+  (`./deploy.sh -llama`). Its card warns of long reasoning loops, which the preset's shared
+  `reasoning-budget` of 8,192 tokens stops. Its reasoning effort is `high` unless a request says
+  otherwise. Inkling, Inkling-Small and Inkling 2 Small (975B, 276B and 594B) don't fit the box
+  and have no GGUF build.
 - **Gemma 4** thinks only when the request turns it on. A preset of your own with
   `chat-template-kwargs = {"enable_thinking":true}` does that for every request.
 - **GLM-4.7-Flash** has a 202,752-token context. Z.ai ran its terminal and SWE benchmarks at

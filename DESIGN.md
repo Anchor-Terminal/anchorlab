@@ -269,7 +269,13 @@ small, they use the standard library only, and they treat everything above as da
   it. A `deploy.sh` changed by the pull hands over to the new one. llama.cpp is rebuilt only with
   `-llama`: a new llama.cpp can change what a model does, so updating it is a decision and not a
   side effect. Tested as an ordinary user with a stand-in for sudo, systemctl and the harness, not
-  yet on the box.
+  yet on the box. The first `-llama` on the box, on 24 November 2026 for Inkling 2 Mini, stopped
+  at "LLAMA_CPP in private/settings.env names no llama.cpp checkout": the setting was new and the
+  box's settings didn't have it. So an empty `LLAMA_CPP` is looked for (a clone of llama.cpp up to
+  three folders down from home, beside the anchorlab clone, or in `/opt`, `/srv`,
+  `/usr/local/src`), and with none a new one is cloned to `~/llama.cpp`; either way its path is
+  written to `private/settings.env`, which `models/install.sh` reads as root. Two checkouts, or one
+  made with sudo that the user can't pull into, stop it with what to do.
 - **Our own things live in `private/`, which git ignores.** Results and transcripts copied off the
   box, our settings and presets, notes. The scripts read `private/settings.env` when it's there, so
   nothing about our machines is written into the public code, and one checkout holds both.

@@ -361,6 +361,37 @@ func TestEvaluatingForDays(t *testing.T) {
 	}
 }
 
+// A skip ends the evaluation in progress, and one only waiting shows as skipped too without
+// touching what's running.
+func TestLatelySkipped(t *testing.T) {
+	c, _ := fixture(t)
+	write(t, filepath.Join(c.State, "events", "2026-11-17.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-17T05:00:00Z","run":"","ev":"harness.start","model":"x"}`,
+		`{"t":"2026-11-17T05:01:00Z","run":"","ev":"eval.start","model":"granite-4.2-30b"}`,
+		`{"t":"2026-11-17T05:40:00Z","run":"","ev":"eval.skipped","model":"granite-4.2-30b"}`,
+		`{"t":"2026-11-17T05:41:00Z","run":"","ev":"eval.start","model":"gemma-4-31b"}`,
+		`{"t":"2026-11-17T05:42:00Z","run":"","ev":"bench.skipped","model":"glm-4.7-flash","waiting":true}`,
+		`{"t":"2026-11-17T05:43:00Z","run":"","ev":"eval.slow","model":"granite-4.1-8b","waiting":true}`,
+	}, "\n")+"\n")
+	write(t, filepath.Join(c.State, "eval", "slow", "granite-4.2-30b.json"), `{"model":"granite-4.2-30b","avgMs":840000,"questions":4,"at":"2026-11-17T05:40:00Z"}`+"\n")
+	write(t, filepath.Join(c.State, "eval", "slow", "bad.json"), `{"model":"../x","avgMs":1,"questions":1}`+"\n")
+	s := Collect(c)
+	var got []string
+	for _, f := range s.Lately {
+		got = append(got, f.Kind+" "+f.Model+" "+f.How+" "+f.At.Format("15:04"))
+	}
+	want := []string{"evaluate granite-4.1-8b slow 05:43", "bench glm-4.7-flash skipped 05:42", "evaluate granite-4.2-30b skipped 05:40"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("lately:\n got %q\nwant %q", got, want)
+	}
+	if len(s.Slow) != 1 || s.Slow[0].Model != "granite-4.2-30b" || s.Slow[0].AvgMs != 840000 {
+		t.Errorf("slow: %+v", s.Slow)
+	}
+	if s.Evaluating != "gemma-4-31b" {
+		t.Errorf("evaluating %q, want the one after the skip", s.Evaluating)
+	}
+}
+
 // An evaluation carried on after a stop counts on from what it had done, and its request, kept in
 // the inbox until it's done, isn't also shown as waiting.
 func TestProgressResumed(t *testing.T) {

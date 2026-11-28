@@ -325,21 +325,11 @@ func modelRequests(state, prefix string) (models []string, files []string) {
 	}
 	var rs []req
 	for _, p := range paths {
-		b, err := os.ReadFile(p)
-		fi, err2 := os.Stat(p)
-		if err != nil || err2 != nil {
+		model, at, ok := readRequest(p)
+		if !ok {
 			continue
 		}
-		// the first line is the model; the second, when it's there, is when it was asked for in
-		// nanoseconds (queueModel). A file's own time is only as fine as the filesystem's clock
-		// tick, so requests made a few milliseconds apart would tie and run in name order.
-		model, rest, _ := strings.Cut(string(b), "\n")
-		stamp, _, _ := strings.Cut(rest, "\n") // a third line, when there is one, is the mode or the set
-		at := fi.ModTime().UnixNano()
-		if n, err := strconv.ParseInt(strings.TrimSpace(stamp), 10, 64); err == nil && n > 0 {
-			at = n
-		}
-		rs = append(rs, req{p, strings.TrimSpace(model), at})
+		rs = append(rs, req{p, model, at})
 	}
 	sort.SliceStable(rs, func(i, j int) bool {
 		if rs[i].at != rs[j].at {
@@ -351,6 +341,83 @@ func modelRequests(state, prefix string) (models []string, files []string) {
 		models, files = append(models, r.model), append(files, r.path)
 	}
 	return models, files
+}
+
+// readRequest reads a model request: the first line is the model; the second, when it's there, is
+// when it was asked for in nanoseconds (queueModel). A file's own time is only as fine as the
+// filesystem's clock tick, so requests made a few milliseconds apart would tie and run in name
+// order. A third line, when there is one, is the mode or the set.
+func readRequest(path string) (model string, at int64, ok bool) {
+	b, err := os.ReadFile(path)
+	fi, err2 := os.Stat(path)
+	if err != nil || err2 != nil || len(b) > 4<<10 {
+		return "", 0, false
+	}
+	model, rest, _ := strings.Cut(string(b), "\n")
+	stamp, _, _ := strings.Cut(rest, "\n")
+	at = fi.ModTime().UnixNano()
+	if n, err := strconv.ParseInt(strings.TrimSpace(stamp), 10, 64); err == nil && n > 0 {
+		at = n
+	}
+	return strings.TrimSpace(model), at, true
+}
+
+// RequestAt is when a bench, evaluation or skip request was asked for, in nanoseconds, or 0 when
+// the file can't be read (it's gone).
+func RequestAt(path string) int64 {
+	_, at, ok := readRequest(path)
+	if !ok {
+		return 0
+	}
+	return at
+}
+
+// QueueSkip asks the harness to skip a model: to drop its evaluation or bench in progress, and the
+// ones waiting in the inbox, that were asked for before the skip. One asked for after it runs as
+// usual. A skip request in the inbox, named and written like the others (queueModel), except that
+// asking again moves its time on to now.
+func QueueSkip(state, model string) error {
+	name := filepath.Base(skipName(model))
+	return WriteInbox(state, name, []byte(model+"\n"+strconv.FormatInt(time.Now().UnixNano(), 10)+"\n"))
+}
+
+func skipName(model string) string {
+	return "skip-" + strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			return r
+		}
+		return '-'
+	}, model) + ".request"
+}
+
+// SkipRequests are the skips waiting: for each model, the latest time a skip was asked for, and
+// every skip request's file.
+func SkipRequests(state string) (asked map[string]int64, files []string) {
+	models, files := modelRequests(state, "skip-")
+	asked = map[string]int64{}
+	for i, m := range models {
+		if at := RequestAt(files[i]); at > asked[m] {
+			asked[m] = at
+		}
+	}
+	return asked, files
+}
+
+// SkipAsked says whether a skip of model was asked for at or after `since` (nanoseconds).
+func SkipAsked(state, model string, since int64) bool {
+	asked, _ := SkipRequests(state)
+	at, ok := asked[model]
+	return ok && at >= since
+}
+
+// DoneSkip removes the skip requests for model, once the harness has acted on them.
+func DoneSkip(state, model string) {
+	models, files := modelRequests(state, "skip-")
+	for i, m := range models {
+		if m == model {
+			os.Remove(files[i])
+		}
+	}
 }
 
 // ExportVersion is the first line of an export: the format, then the line the next ask starts after.
@@ -489,6 +556,38 @@ func EvalMode(file string) string {
 		return "code"
 	}
 	return "either"
+}
+
+// QueueEvalForced asks for an evaluation of a model even if the lab found it too slow to test
+// (eval.SlowQuestion): "force" on the request's third line, which reads as the normal set in
+// either mode, the Lab score's. A request already waiting keeps its place and gains the force.
+func QueueEvalForced(state, model string) error {
+	name := "eval-" + strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '-' {
+			return r
+		}
+		return '-'
+	}, model) + ".request"
+	stamp := strconv.FormatInt(time.Now().UnixNano(), 10)
+	if m, at, ok := readRequest(filepath.Join(state, "inbox", name)); ok && m == model {
+		stamp = strconv.FormatInt(at, 10)
+	}
+	return WriteInbox(state, name, []byte(model+"\n"+stamp+"\nforce\n"))
+}
+
+// EvalForced says whether an evaluation request asks to run even for a model found too slow.
+func EvalForced(file string) bool {
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return false
+	}
+	lines := strings.Split(string(b), "\n")
+	for i := 2; i < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) == "force" {
+			return true
+		}
+	}
+	return false
 }
 
 func queueModel(state, prefix, model string, extra ...string) error {

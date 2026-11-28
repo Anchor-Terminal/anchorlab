@@ -42,6 +42,7 @@ func evalCmd(args []string) error {
 	check := fs.Bool("check", false, "work out every task's right answer from the site now, with no model, and exit")
 	sample := fs.Bool("sample", false, "one pass over a small mix of the tasks (eval.Sample), printed and not kept: a quick look at a new model")
 	runs := fs.Int("runs", eval.DefaultRuns, "passes over the set; a task counts as right when it's right in more than half of the passes it was scored in")
+	force := fs.Bool("force", false, "evaluate it even if the lab found it too slow to test (over 10 minutes a question on average), and don't stop it for being slow")
 	here := fs.Bool("here", false, "run it in this process even if this user can't write the lab's state; otherwise it's asked of the lab")
 	questions := fs.Bool("questions", false, "print what a model is told (the instructions, the tool list and the questions, no answers) as JSON, for a model run outside the harness, and exit")
 	snapshot := fs.String("snapshot", "", "write the set's right answers now to this file, without printing them, and exit: take one before a model outside the harness answers")
@@ -100,6 +101,8 @@ func evalCmd(args []string) error {
 			queue, scores = journal.QueueEvalHard, "anchor-lab eval -set hard -compare"
 		case *mode == eval.ModeCode:
 			queue = journal.QueueEvalCode
+		case *force:
+			queue = journal.QueueEvalForced
 		}
 		if err := queue(*state, *model); err != nil {
 			return fmt.Errorf("asking the lab to evaluate %s: %w (is this user in the anchorlab group? install.sh adds the user who ran it)", *model, err)
@@ -111,7 +114,7 @@ func evalCmd(args []string) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	s, err := runEval(ctx, *state, *sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature, *runs, *mode, set)
+	s, err := runEval(ctx, *state, *sock, *unsafeCells, *modelURL, *model, *maxTokens, *modelWait, *temperature, *runs, *mode, set, *force)
 	if err != nil {
 		return err
 	}
@@ -172,7 +175,7 @@ func evalOptions(j *journal.Journal, b agent.Brain, model, sock string, unsafeCe
 // cell (the score would measure the box), or the site didn't answer most of the tasks (it would
 // measure the site). A stop keeps the questions finished so far (eval.Checkpoint), and the next
 // evaluation of the same model carries on from them.
-func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string, runs int, mode string, set eval.Set) (eval.Score, error) {
+func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL, model string, maxTokens int, wait time.Duration, temperature string, runs int, mode string, set eval.Set, force ...bool) (eval.Score, error) {
 	b, err := newBrain(modelURL, model, maxTokens, wait, temperature)
 	if err != nil {
 		return eval.Score{}, err
@@ -210,8 +213,25 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 	} else if why != "new" {
 		j.Event("", "eval.restart", map[string]any{"model": model, "why": why})
 	}
+	// a model whose questions take over eval.SlowQuestion on average is stopped and written down
+	// as too slow to test, unless the evaluation was forced
+	forced := len(force) > 0 && force[0]
+	slow := eval.NewSlowWatch(cp)
+	ctx, cancelSlow := context.WithCancelCause(ctx)
+	defer cancelSlow(nil)
+	o.After = func(r eval.TaskResult) {
+		slow.Add(r)
+		if !forced && slow.Slow() {
+			cancelSlow(errTooSlow)
+		}
+	}
 	s := eval.RunN(ctx, o, runs)
 	switch {
+	case errors.Is(context.Cause(ctx), errTooSlow):
+		cp.Stop(time.Since(began))
+		eval.MarkSlow(state, eval.SlowModel{Model: model, AvgMs: slow.AvgMs(), Questions: slow.N(), At: time.Now().UTC()})
+		j.Event("", "eval.slow", map[string]any{"model": model, "avgMs": slow.AvgMs(), "questions": slow.N()})
+		return s, fmt.Errorf("%w: %s a question on average over %d questions, more than %s; the questions done are kept", errTooSlow, time.Duration(slow.AvgMs())*time.Millisecond, slow.N(), eval.SlowQuestion)
 	case ctx.Err() != nil:
 		cp.Stop(time.Since(began))
 		return s, errors.New("stopped before the end; the questions done are kept, and it carries on from them next time")
@@ -237,6 +257,7 @@ func runEval(ctx context.Context, state, sock string, unsafeCells bool, modelURL
 		return s, err
 	}
 	cp.Finish()
+	eval.ClearSlow(state, model) // forced or not, it has its score now
 	return s, nil
 }
 
@@ -330,6 +351,11 @@ func evalQueued(ctx context.Context, j *journal.Journal, state, sock string, uns
 		if ctx.Err() != nil {
 			return
 		}
+		skipQueued(j, state)
+		since := journal.RequestAt(files[i])
+		if since == 0 {
+			continue // skipped while it waited, or taken back
+		}
 		if !modelName.MatchString(m) {
 			os.Remove(files[i])
 			j.Event("", "eval.refused", map[string]any{"model": m})
@@ -337,8 +363,33 @@ func evalQueued(ctx context.Context, j *journal.Journal, state, sock string, uns
 		}
 		mode := journal.EvalMode(files[i])
 		set, _ := eval.SetNamed(journal.EvalSet(files[i]))
-		j.Event("", "eval.start", map[string]any{"model": m, "mode": mode, "set": set.Name})
-		s, err := runEval(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, eval.DefaultRuns, mode, set)
+		force := journal.EvalForced(files[i])
+		if !force && eval.IsSlow(state, m) {
+			// found too slow before: not tested again unless it's forced from the Lab tab
+			os.Remove(files[i])
+			j.Event("", "eval.slow", map[string]any{"model": m, "waiting": true})
+			continue
+		}
+		j.Event("", "eval.start", map[string]any{"model": m, "mode": mode, "set": set.Name, "force": force})
+		wctx, cancel := skippable(ctx, state, m, since)
+		s, err := runEval(wctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, eval.DefaultRuns, mode, set, force)
+		skipped := wasSkipped(ctx, wctx, err)
+		cancel(nil)
+		if errors.Is(err, errTooSlow) && ctx.Err() == nil {
+			// written down as too slow (eval.MarkSlow): the request goes and the lab moves on
+			os.Remove(files[i])
+			j.Event("", "eval.slow", map[string]any{"model": m})
+			continue
+		}
+		if skipped {
+			// asked for from the Lab tab: the request goes and the lab moves on to the next. The
+			// questions done stay in the checkpoint, so evaluating it again the same way within the
+			// week carries on from them.
+			os.Remove(files[i])
+			journal.DoneSkip(state, m)
+			j.Event("", "eval.skipped", map[string]any{"model": m})
+			continue
+		}
 		if err != nil && ctx.Err() != nil {
 			// the harness is stopping, for a restart or an install: nothing wrong with the model. The
 			// request stays in the inbox, still the oldest, so the next start takes it first and

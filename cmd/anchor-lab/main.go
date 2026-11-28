@@ -50,7 +50,7 @@ var version = "dev" // set with -ldflags "-X main.version=..."
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | preflight | cell | sync | stats | status | model | targets | retest | api | boxkey | version")
+		fmt.Fprintln(os.Stderr, "usage: anchor-lab run | bench | eval | preflight | cell | sync | stats | status | model | targets | retest | pause | skip | api | boxkey | version")
 		os.Exit(2)
 	}
 	var err error
@@ -80,6 +80,8 @@ func main() {
 		err = apiCmd(args, os.Stdout)
 	case "pause":
 		err = pauseCmd(args, os.Stdout)
+	case "skip":
+		err = skipCmd(args, os.Stdout)
 	case "boxkey":
 		err = boxKeyCmd(args, os.Stdout)
 	case "why":
@@ -558,13 +560,27 @@ func benchQueued(ctx context.Context, j *journal.Journal, state, sock string, un
 		if ctx.Err() != nil {
 			return
 		}
+		skipQueued(j, state)
+		since := journal.RequestAt(files[i])
+		if since == 0 {
+			continue // skipped while it waited, or taken back
+		}
 		if !modelName.MatchString(m) {
 			os.Remove(files[i])
 			j.Event("", "bench.refused", map[string]any{"model": m})
 			continue
 		}
 		j.Event("", "bench.start", map[string]any{"model": m})
-		s, err := runBench(ctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, bench.DefaultRuns)
+		wctx, cancel := skippable(ctx, state, m, since)
+		s, err := runBench(wctx, state, sock, unsafeCells, modelURL, m, maxTokens, wait, temperature, bench.DefaultRuns)
+		skipped := wasSkipped(ctx, wctx, err)
+		cancel(nil)
+		if skipped {
+			os.Remove(files[i])
+			journal.DoneSkip(state, m)
+			j.Event("", "bench.skipped", map[string]any{"model": m})
+			continue
+		}
 		if err != nil && ctx.Err() != nil {
 			// a stop or a pause: the request stays, and the bench runs again from the start after
 			j.Event("", "bench."+stopWord(ctx), map[string]any{"model": m})

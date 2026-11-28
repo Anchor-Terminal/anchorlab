@@ -63,6 +63,9 @@ type Stats struct {
 	// Lately is how the latest evaluations and benches ended, newest first, today's and
 	// yesterday's: done, failed, or stopped by the harness starting again
 	Lately []Finished `json:"lately"`
+	// Slow are the models the lab found too slow to evaluate (over 10 minutes a question on
+	// average), newest first: evaluated again only when it's forced
+	Slow []Slow `json:"slow,omitempty"`
 	// Queue is what's waiting in the inbox, in the order the harness takes it: retests, then
 	// benches, then evaluations
 	Queue   []Queued `json:"queue"`
@@ -111,7 +114,9 @@ type Progress struct {
 }
 
 // Finished is one evaluation or bench that ended. Kind is evaluate or bench; How is done, failed,
-// stopped (the harness stopping) or paused (it goes on after the pause).
+// stopped (the harness stopping), paused (it goes on after the pause), skipped (asked for from
+// the Lab tab, running or still waiting) or slow (over 10 minutes a question on average, and
+// written down as too slow to test).
 type Finished struct {
 	Kind  string    `json:"kind"`
 	Model string    `json:"model"`
@@ -270,6 +275,7 @@ func Collect(c Config) Stats {
 		}
 	}
 	s.Queue = queue(c.State)
+	s.Slow = slowModels(c.State)
 	if until, ok := journal.PausedUntil(c.State, t); ok {
 		s.PausedUntil = until
 	}
@@ -402,7 +408,7 @@ func events(state string, t time.Time, s *Stats, finished finishedRuns) {
 			s.Started = e.T.UTC()
 			cur = nil
 			s.track(e)
-		case "eval.start", "eval.end", "eval.failed", "eval.stopped", "eval.paused", "bench.start", "bench.end", "bench.failed", "bench.stopped", "bench.paused":
+		case "eval.start", "eval.end", "eval.failed", "eval.stopped", "eval.paused", "eval.skipped", "eval.slow", "bench.start", "bench.end", "bench.failed", "bench.stopped", "bench.paused", "bench.skipped":
 			s.track(e)
 		case "run.start":
 			s.Today.Runs++
@@ -862,9 +868,19 @@ func (s *Stats) track(e event) {
 			s.Lately = s.Lately[:lately]
 		}
 	}
-	how := map[string]string{"end": "done", "failed": "failed", "stopped": "stopped", "paused": "paused"}
+	how := map[string]string{"end": "done", "failed": "failed", "stopped": "stopped", "paused": "paused", "skipped": "skipped", "slow": "slow"}
 	kind, what, _ := strings.Cut(e.Ev, ".")
 	switch {
+	case (what == "skipped" || what == "slow") && (kind == "eval" || kind == "bench") && modelOK.MatchString(e.Model):
+		// a skip, or a model found too slow, names its model, which may be one that was only waiting
+		k, cur := "evaluate", &s.Evaluating
+		if kind == "bench" {
+			k, cur = "bench", &s.Benching
+		}
+		finish(k, e.Model, what)
+		if *cur == e.Model {
+			*cur = ""
+		}
 	case e.Ev == "harness.start":
 		finish("evaluate", s.Evaluating, "stopped")
 		finish("bench", s.Benching, "stopped")
@@ -992,6 +1008,39 @@ func sizesOf(ms []string) map[string]int64 {
 			}
 			out[m] = n
 		}
+	}
+	return out
+}
+
+// Slow is a model the lab found too slow to evaluate (eval.SlowModel, kept in
+// <state>/eval/slow/<model>.json): its average question, how many were timed, and when.
+type Slow struct {
+	Model     string    `json:"model"`
+	AvgMs     int64     `json:"avgMs"`
+	Questions int       `json:"questions"`
+	At        time.Time `json:"at"`
+}
+
+// slowModels reads the models written down as too slow, newest first, at most 20, each checked
+// like everything else that leaves the box.
+func slowModels(state string) []Slow {
+	paths, _ := filepath.Glob(filepath.Join(state, "eval", "slow", "*.json"))
+	var out []Slow
+	for _, p := range paths {
+		b, err := os.ReadFile(p)
+		if err != nil || len(b) > 4<<10 {
+			continue
+		}
+		var m Slow
+		if json.Unmarshal(b, &m) != nil || !modelOK.MatchString(m.Model) || strings.Contains(m.Model, "..") || m.AvgMs <= 0 || m.AvgMs > int64(7*24*time.Hour/time.Millisecond) || m.Questions < 0 || m.Questions > 10000 {
+			continue
+		}
+		m.At = m.At.UTC()
+		out = append(out, m)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].At.After(out[j].At) })
+	if len(out) > 20 {
+		out = out[:20]
 	}
 	return out
 }

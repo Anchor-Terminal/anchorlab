@@ -42,7 +42,7 @@ const commandSkew = time.Minute
 // Command is one thing the site asks of the lab.
 type Command struct {
 	V string `json:"v"`
-	// Do is key.put | key.delete | retest | bench | eval | model | pause | resume
+	// Do is key.put | key.delete | retest | bench | eval | skip | model | pause | resume
 	Do     string       `json:"do"`
 	Slug   string       `json:"slug,omitempty"`
 	Sealed *seal.Sealed `json:"sealed,omitempty"`
@@ -50,6 +50,7 @@ type Command struct {
 	Slugs  []string     `json:"slugs,omitempty"`  // retest: these, or ["*"] for every server
 	Failed bool         `json:"failed,omitempty"` // retest: every server Model failed or partly failed
 	Hours  int          `json:"hours,omitempty"`  // pause: how long, 1 to 24
+	Force  bool         `json:"force,omitempty"`  // eval: even a model found too slow to test
 }
 
 var commandModel = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+-]{0,95}$`)
@@ -240,10 +241,24 @@ func (sv *Server) do(c Command) (string, error) {
 		if !commandModel.MatchString(c.Model) || strings.Contains(c.Model, "..") {
 			return "", errors.New("a model to evaluate")
 		}
+		if c.Force {
+			if err := journal.QueueEvalForced(st, c.Model); err != nil {
+				return "", errors.New("couldn't queue it")
+			}
+			return "queued a forced evaluation of " + c.Model + ": it runs to the end however slow it is", nil
+		}
 		if err := journal.QueueEval(st, c.Model); err != nil {
 			return "", errors.New("couldn't queue it")
 		}
 		return "queued an evaluation of " + c.Model, nil
+	case "skip":
+		if !commandModel.MatchString(c.Model) || strings.Contains(c.Model, "..") {
+			return "", errors.New("a model to skip")
+		}
+		if err := journal.QueueSkip(st, c.Model); err != nil {
+			return "", errors.New("couldn't skip it")
+		}
+		return "skipping " + c.Model + ": its evaluation or bench stops within seconds, and the lab moves on", nil
 	case "pause":
 		if c.Hours < 1 || time.Duration(c.Hours)*time.Hour > journal.MaxPause {
 			return "", errors.New("hours to pause, from 1 to 24")

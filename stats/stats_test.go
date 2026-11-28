@@ -332,6 +332,35 @@ func TestLately(t *testing.T) {
 	}
 }
 
+// An evaluation that started days ago and hasn't ended is still what the harness is doing, with its
+// progress counted from its first question: on 28 November 2026 one ran past two midnights and the
+// Lab tab said idle.
+func TestEvaluatingForDays(t *testing.T) {
+	c, _ := fixture(t)
+	write(t, filepath.Join(c.State, "events", "2026-11-17.ndjson"), `{"t":"2026-11-17T09:01:00Z","seq":2,"run":"20261117T090100-reqres","ev":"run.start","slug":"reqres","url":"https://reqres.in/mcp"}`+"\n")
+	write(t, filepath.Join(c.State, "events", "2026-11-14.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-14T08:00:00Z","seq":1,"run":"","ev":"harness.start","model":"x"}`,
+		`{"t":"2026-11-14T08:05:00Z","seq":2,"run":"","ev":"call","tool":"t","status":"ok"}`,
+		`{"t":"2026-11-14T09:00:00Z","seq":3,"run":"","ev":"eval.start","model":"granite-4.2-30b"}`,
+	}, "\n")+"\n")
+	write(t, filepath.Join(c.State, "eval", "events", "2026-11-14.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-14T09:01:00Z","run":"","ev":"eval.task","model":"granite-4.2-30b","pass":1,"passes":3,"n":1,"of":40}`,
+		`{"t":"2026-11-14T09:30:00Z","run":"r1","ev":"eval.end","status":"correct"}`,
+	}, "\n")+"\n")
+	write(t, filepath.Join(c.State, "eval", "events", "2026-11-17.ndjson"), strings.Join([]string{
+		`{"t":"2026-11-17T13:00:00Z","run":"","ev":"eval.task","model":"granite-4.2-30b","pass":2,"passes":3,"n":7,"of":40}`,
+		`{"t":"2026-11-17T13:40:00Z","run":"r2","ev":"eval.end","status":"wrong"}`,
+	}, "\n")+"\n")
+	s := Collect(c)
+	if s.Evaluating != "granite-4.2-30b" {
+		t.Fatalf("evaluating %q, want the one started three days ago", s.Evaluating)
+	}
+	p := s.Progress
+	if p == nil || p.Done != 2 || p.Right != 1 || p.Wrong != 1 || p.Pass != 2 || p.Question != 7 || !p.Started.Equal(time.Date(2026, 11, 14, 9, 1, 0, 0, time.UTC)) {
+		t.Errorf("progress %+v", p)
+	}
+}
+
 // A skip ends the evaluation in progress, and one only waiting shows as skipped too without
 // touching what's running.
 func TestLatelySkipped(t *testing.T) {

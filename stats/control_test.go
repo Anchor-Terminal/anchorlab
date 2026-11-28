@@ -172,3 +172,35 @@ func TestPauseCommand(t *testing.T) {
 		t.Error("still paused after resume")
 	}
 }
+
+// A skip from the admin page names a model, and leaves a skip request for the harness.
+func TestSkipCommand(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	sv := &Server{Config: Config{State: state, Root: state}}
+	if did, err := sv.do(Command{V: CommandVersion, Do: "skip", Model: "granite-4.2-30b"}); err != nil || !strings.HasPrefix(did, "skipping granite-4.2-30b") {
+		t.Fatalf("skip: %q %v", did, err)
+	}
+	if !journal.SkipAsked(state, "granite-4.2-30b", 0) {
+		t.Error("no skip request in the inbox")
+	}
+	for _, m := range []string{"", "../../etc/passwd", "-x"} {
+		if _, err := sv.do(Command{V: CommandVersion, Do: "skip", Model: m}); err == nil {
+			t.Errorf("a skip of %q was taken", m)
+		}
+	}
+}
+
+// An evaluation can be forced, for a model the lab found too slow.
+func TestForcedEvalCommand(t *testing.T) {
+	state := t.TempDir()
+	os.MkdirAll(filepath.Join(state, "inbox"), 0o770)
+	sv := &Server{Config: Config{State: state, Root: state}}
+	if did, err := sv.do(Command{V: CommandVersion, Do: "eval", Model: "granite-4.2-30b", Force: true}); err != nil || !strings.Contains(did, "forced") {
+		t.Fatalf("forced eval: %q %v", did, err)
+	}
+	_, files := journal.EvalRequests(state)
+	if len(files) != 1 || !journal.EvalForced(files[0]) {
+		t.Errorf("requests %q", files)
+	}
+}

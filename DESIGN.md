@@ -644,6 +644,33 @@ small, they use the standard library only, and they treat everything above as da
   it runs again from the start, a retest queues the servers it hadn't reached, and a tool test a
   pause cut short is tested again. The event says `eval.paused` or `bench.paused`, apart from a
   stop, and `lately` says paused.
+- **A model can be skipped.** Vlad, 28 November 2026, with granite-4.2-30b part way through: "can
+  we add a way to skip a model?". The Lab tab's Skip (or `anchor-lab skip -model <name>` on the
+  box) sends the signed `skip` command, which leaves a skip request in the inbox like the others
+  (no sudo, the harness acts on it itself). The evaluation or bench of that model in progress stops
+  within five seconds (`skipEvery`), the ones waiting for it are dropped, and the lab moves on.
+  Only what was asked for before the skip goes: an evaluation asked for after it runs as usual.
+  The questions done stay in the checkpoint, so evaluating it again the same way within the week
+  carries on from them. The events say `eval.skipped` or `bench.skipped`, and `lately` says
+  skipped. Retests and the explores with the lab's own model aren't skipped: switching the model
+  is how those change.
+- **A model whose questions take over 10 minutes on average isn't tested.** Vlad, the same
+  evening: "it's very slow and it failed a few things already so maybe if the task takes more than
+  10 min on average we can classify it as not to be tested", "and have a way to force it maybe".
+  An evaluation times each question it writes down (`eval.SlowWatch`, through `Options.After`),
+  the ones in its checkpoint included, and leaves out the ones the site or the box failed under,
+  since those measure them and not the model. Once three are in (`eval.SlowAfter`, so one cold
+  first question doesn't decide it) and the average is over 10 minutes (`eval.SlowQuestion`), it
+  stops, keeps its checkpoint, and writes the model down in `<state>/eval/slow/<model>.json` with
+  the average. A later request for that model is dropped with `eval.slow` unless it's forced: the
+  Lab tab's "Evaluate anyway" sends `eval` with `force`, which puts "force" on the request's third
+  line (`journal.QueueEvalForced`, the normal set in either mode), and `anchor-lab eval -force`
+  does the same. A forced evaluation runs to the end however slow it is, and any evaluation that
+  gets its score takes the mark off. The stats carry the marked models in `slow` and `lately`
+  says slow. The time per question is the task's own wall time, not the time it waited behind a
+  pause, so a paused night doesn't make a model slow. Adding skipped and slow to `lately` and
+  `slow` to the stats keeps `anchor-lab-stats/1`: nothing an older field meant changed, the
+  same way paused was added, and the site takes the new words in the same change.
 - **A pause, for the night.** Vlad, 18 November 2026: "i need an option to pause it the lab since
   it's creating too much heat in the room overnight and people can't sleep, i want to pause it for 8
   hours as an option". `anchor-lab pause -for 8h` (8 hours unless told otherwise), or the Lab tab's

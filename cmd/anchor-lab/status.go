@@ -205,7 +205,7 @@ func printStatus(w io.Writer, s stats.Stats, n int, now time.Time) {
 			if i == 3 {
 				break
 			}
-			what := map[string]string{"done": "finished", "failed": "failed", "stopped": "stopped by a restart", "paused": "paused"}[f.How]
+			what := map[string]string{"done": "finished", "failed": "failed", "stopped": "stopped by a restart", "paused": "paused", "skipped": "skipped", "slow": "too slow to test"}[f.How]
 			if f.Kind == "bench" {
 				what = "bench " + what
 			}

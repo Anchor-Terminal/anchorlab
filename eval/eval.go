@@ -62,6 +62,10 @@ type Options struct {
 	Set Set
 	// Hold, when set, waits out a pause before each question (journal.Pause)
 	Hold func(ctx context.Context)
+	// After, when set, hears of each question asked in this run once it's written down (a
+	// failed one isn't), on the evaluation's own goroutine: the harness times the model with it
+	// (SlowWatch)
+	After func(r TaskResult)
 	// Resume is the evaluation's checkpoint: questions it finished before a stop aren't asked
 	// again, and each one finished now is written down. Nil keeps nothing.
 	Resume *Checkpoint
@@ -809,6 +813,9 @@ func Run(ctx context.Context, o Options) []TaskResult {
 			// a failed question isn't written down, so the next start asks it again
 			if err := o.Resume.Record(max(o.pass, 1), r); err != nil {
 				o.Journal.Event("", "eval.checkpoint.failed", map[string]any{"task": t.ID, "model": o.Model})
+			}
+			if o.After != nil {
+				o.After(r)
 			}
 		}
 		out = append(out, r)

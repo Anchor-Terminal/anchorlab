@@ -202,6 +202,8 @@ anchor-lab status -from http://<the box>:8790     # from the machine the box let
 anchor-lab status -watch                          # again every 10 seconds, until Ctrl-C
 anchor-lab pause                                  # stop for 8 hours, within 5 seconds (-for 2h for another length, up to 24h)
 anchor-lab pause -off                             # go on now
+anchor-lab skip -model granite-4.2-30b            # stop its evaluation or bench within 5 seconds, drop what's waiting for it, move on
+anchor-lab eval -model granite-4.2-30b -force     # evaluate a model the lab found too slow (over 10 minutes a question)
 anchor-lab status -json                           # the stats as they are, for a script
 anchor-lab retest -failed                         # test again what failed (Testing again, below)
 ```

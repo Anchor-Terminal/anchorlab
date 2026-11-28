@@ -56,7 +56,7 @@ func TestNearMisses(t *testing.T) {
 // version, and one that can is a new version of the set (Version, HardVersion) and a Rescore for
 // the saved scores. gBench forces the same decision with a fingerprint of its scoring code.
 var scoringFingerprints = map[string]string{
-	Version: "c3db56b7a1a6c194",
+	Version: "8506c161c045c166", // 28 November 2026: Run calls Options.After once a question is written down, which hears of it and moves no grade
 }
 
 // scoringCode is the functions and variables whose change can change a grade.

@@ -633,8 +633,13 @@ small, they use the standard library only, and they treat everything above as da
   the evaluation in progress (which question of which pass, how many right, wrong and skipped so
   far, when it started) and the queue in the inbox, in the order the harness takes it, and
   `anchor-lab status` prints both. Each question's `eval.task` event says where it falls, so the
-  stats count it from the eval journal without reading results. An evaluation runs for hours, so
-  the stats read yesterday's events for one that started before midnight. The queue is words from
+  stats count it from the eval journal without reading results. An evaluation runs for hours, and
+  a slow model's for days, so the stats read the last two weeks of events (`lookBack`, longer than
+  a checkpoint is kept), skipping the lines that aren't about an evaluation, a bench or a start
+  before parsing them. They read only yesterday's until 28 November 2026, when an evaluation ran
+  past two midnights and the Lab tab said idle while it went on; Vlad: "why would the lab end up
+  in idle while it has a queue of models to test and it was half way though tetsing a model?
+  ... it must have been a bug". The queue is words from
   a fixed list and model names that pass the same check as everywhere else.
 - **A pause stops the work at once.** Vlad, the same night: "i need it to pause even when it's mid
   task, when i tell it to pause it drops, it does not wait to finish". The harness's work runs in

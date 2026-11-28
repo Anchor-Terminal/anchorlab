@@ -258,7 +258,11 @@ func Collect(c Config) Stats {
 		s.Targets = len(f.Targets)
 	}
 	finished := results(c.State, t, &s)
-	busy(c.State, t.AddDate(0, 0, -1), &s) // an evaluation can start before midnight and run for hours after
+	// an evaluation can run for days: the days before today, oldest first, for what the harness
+	// was busy with when today began
+	for d := lookBack; d >= 1; d-- {
+		busy(c.State, t.AddDate(0, 0, -d), &s)
+	}
 	events(c.State, t, &s, finished)
 	if s.Evaluating != "" {
 		if p := progress(c.State, t); p != nil && p.Model == s.Evaluating {
@@ -806,6 +810,20 @@ func Listen(addr string) (net.Listener, error) {
 	return net.Listen("tcp", addr)
 }
 
+// lookBack is how many days before today the stats read for what the harness is busy with, and
+// for the evaluation's progress. One day wasn't enough: an evaluation of a slow model ran past two
+// midnights and the Lab tab said idle, with a queue waiting, while it was still evaluating (Vlad,
+// 28 November 2026: "why would the lab end up in idle while it has a queue of models to test and
+// it was half way though tetsing a model?"). Two weeks is longer than a checkpoint is kept
+// (eval.ResumeMaxAge), so no evaluation can be busy from before it.
+const lookBack = 14
+
+// busyLine is a line of the harness's events that says what it's busy with: the others (calls,
+// replies, programs) are most of a day's file, and are skipped before they're parsed.
+func busyLine(b []byte) bool {
+	return bytes.Contains(b, []byte(`"ev":"eval.`)) || bytes.Contains(b, []byte(`"ev":"bench.`)) || bytes.Contains(b, []byte(`"ev":"harness.start"`))
+}
+
 // busy reads one day's events for what the harness was busy with when the day ended: an
 // evaluation or a bench that started then and may not have ended yet.
 func busy(state string, day time.Time, s *Stats) {
@@ -817,6 +835,9 @@ func busy(state string, day time.Time, s *Stats) {
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
 	for sc.Scan() {
+		if !busyLine(sc.Bytes()) {
+			continue
+		}
 		var e event
 		if json.Unmarshal(sc.Bytes(), &e) != nil {
 			continue
@@ -863,12 +884,13 @@ func (s *Stats) track(e event) {
 	}
 }
 
-// progress reads the eval journal's events, yesterday's then today's, for the latest evaluation:
+// progress reads the eval journal's events, from lookBack days ago to today, for the latest evaluation:
 // it starts at the first question of the first pass, or where a stopped one carried on with what
 // it had done (eval.resume), and each question's end counts.
 func progress(state string, t time.Time) *Progress {
 	var p *Progress
-	for _, day := range []time.Time{t.AddDate(0, 0, -1), t} {
+	for d := lookBack; d >= 0; d-- {
+		day := t.AddDate(0, 0, -d)
 		f, err := os.Open(filepath.Join(state, "eval", "events", day.Format("2006-01-02")+".ndjson"))
 		if err != nil {
 			continue
@@ -876,6 +898,9 @@ func progress(state string, t time.Time) *Progress {
 		sc := bufio.NewScanner(f)
 		sc.Buffer(make([]byte, 0, 64<<10), 4<<20)
 		for sc.Scan() {
+			if !bytes.Contains(sc.Bytes(), []byte(`"ev":"eval.`)) {
+				continue
+			}
 			var e event
 			if json.Unmarshal(sc.Bytes(), &e) != nil || e.T.IsZero() {
 				continue
